@@ -10,7 +10,7 @@
 module tb_block_rule;
 
 	localparam int CELL_BITS = 4;
-	localparam int NUM_VECTORS = 648;
+	localparam int NUM_VECTORS = 2048;
 
 	logic [1:0]           grav_dir;
 	logic                 rnd;

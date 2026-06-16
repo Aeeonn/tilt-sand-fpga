@@ -5,13 +5,18 @@ Pure-Python implementation of the block_rule combinational logic.
 Same two-phase approach: vertical fall first, then diagonal slide.
 Used by tb_block_rule (via generated vectors) and margolus_engine.py.
 
-Materials (M3 MVP): EMPTY=0, WALL=1, SAND=2.
+Materials: EMPTY=0, WALL=1, SAND=2, WATER=3.
+Density ordering: EMPTY < WATER < SAND (WALL is immovable).
 """
 
 # Material IDs (must match sand_materials.py)
 EMPTY = 0
 WALL  = 1
 SAND  = 2
+WATER = 3
+
+# Density: higher = heavier (sinks). WALL = infinity (never moves).
+DENSITY = {EMPTY: 0, WATER: 1, SAND: 2, WALL: 99}
 
 # Gravity directions
 G_DOWN  = 0
@@ -20,48 +25,91 @@ G_LEFT  = 2
 G_RIGHT = 3
 
 
-def _can_fall(src, dst):
-    """src can displace dst if src is SAND and dst is EMPTY."""
-    return src == SAND and dst == EMPTY
+def _is_mobile(mat):
+    """A material that can participate in swaps (not WALL)."""
+    return mat != WALL
+
+
+def _falls_into(src, dst):
+    """src displaces dst vertically if src is heavier and dst is lighter.
+    WALL never moves. EMPTY never falls."""
+    if not _is_mobile(src) or not _is_mobile(dst):
+        return False
+    if src == EMPTY:
+        return False
+    return DENSITY[src] > DENSITY[dst]
 
 
 def _rule_down(c00, c01, c10, c11, rnd):
     """Apply the block rule with gravity = DOWN (canonical orientation).
 
     Phase 1: vertical fall (each column independently).
-    Phase 2: diagonal slide (only for cells still in row 0 after phase 1).
+             - SAND falls into EMPTY or WATER
+             - WATER falls into EMPTY
+    Phase 2: diagonal slide (granular: SAND only, not WATER).
+    Phase 3: lateral spread (fluid: WATER spreads sideways).
 
     Returns (n00, n01, n10, n11).
     """
-    # Work on mutable copies
     r00, r01, r10, r11 = c00, c01, c10, c11
 
     # Phase 1: vertical fall — left column
-    if _can_fall(r00, r10):
+    if _falls_into(r00, r10):
         r00, r10 = r10, r00
 
     # Phase 1: vertical fall — right column
-    if _can_fall(r01, r11):
+    if _falls_into(r01, r11):
         r01, r11 = r11, r01
 
-    # Phase 2: diagonal slide — only for cells still in row 0 (didn't fall)
-    # Left-top wants to slide to bottom-right diagonal
-    # Right-top wants to slide to bottom-left diagonal
-    left_can  = (r00 == SAND and r10 != EMPTY and r11 == EMPTY)
-    right_can = (r01 == SAND and r11 != EMPTY and r10 == EMPTY)
+    # Phase 2: diagonal slide — SAND only (granular behavior)
+    # Left-top SAND slides to bottom-right if blocked below and diagonal is open
+    left_can  = (r00 == SAND and r10 != EMPTY and r10 != WATER and r11 == EMPTY)
+    # Right-top SAND slides to bottom-left
+    right_can = (r01 == SAND and r11 != EMPTY and r11 != WATER and r10 == EMPTY)
 
     if left_can and right_can:
-        # Both want to slide — rnd picks one
         if rnd:
-            # Left slides: r00 <-> r11
             r00, r11 = r11, r00
         else:
-            # Right slides: r01 <-> r10
             r01, r10 = r10, r01
     elif left_can:
         r00, r11 = r11, r00
     elif right_can:
         r01, r10 = r10, r01
+
+    # Phase 3: lateral spread — WATER flows sideways when blocked below
+    # WATER in row 0 spreads to an adjacent EMPTY in the same row
+    # WATER in row 1 spreads to an adjacent EMPTY in the same row
+    # (only if blocked below — i.e., the cell below in the block is not EMPTY)
+    # For row 0: water at (0,0) can spread to (0,1) if (0,1) is EMPTY and (1,0) blocks
+    #            water at (0,1) can spread to (0,0) if (0,0) is EMPTY and (1,1) blocks
+    w_left  = (r00 == WATER and r10 != EMPTY and r01 == EMPTY)
+    w_right = (r01 == WATER and r11 != EMPTY and r00 == EMPTY)
+
+    if w_left and w_right:
+        # Both want to spread — rnd picks one
+        if rnd:
+            r00, r01 = r01, r00
+        else:
+            r01, r00 = r00, r01  # same effect since both swap
+    elif w_left:
+        r00, r01 = r01, r00
+    elif w_right:
+        r01, r00 = r00, r01
+
+    # Lateral spread for row 1 (bottom row)
+    w_left_b  = (r10 == WATER and r11 == EMPTY)
+    w_right_b = (r11 == WATER and r10 == EMPTY)
+
+    if w_left_b and w_right_b:
+        if rnd:
+            r10, r11 = r11, r10
+        else:
+            pass  # only one moves
+    elif w_left_b:
+        r10, r11 = r11, r10
+    elif w_right_b:
+        r11, r10 = r10, r11
 
     return r00, r01, r10, r11
 
@@ -121,7 +169,7 @@ def generate_test_vectors(filename):
       grav_dir rnd c00 c01 c10 c11 n00 n01 n10 n11
     All values in hex.
     """
-    materials = [EMPTY, WALL, SAND]
+    materials = [EMPTY, WALL, SAND, WATER]
     count = 0
     with open(filename, "w", newline="\n") as f:
         for grav in range(4):
@@ -156,5 +204,5 @@ if __name__ == "__main__":
     n = generate_test_vectors(vec_file)
     print(f"wrote {vec_file} ({n} vectors)")
     # Quick self-check
-    assert n == 4 * 2 * 3**4, f"expected {4*2*3**4}, got {n}"
+    assert n == 4 * 2 * 4**4, f"expected {4*2*4**4}, got {n}"
     print("self-check: all vectors conserve mass ✓")

@@ -206,5 +206,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/grid_scanout.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/lfsr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/block_rule.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/margolus_engine.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/brush.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/particle_count.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/top.sv
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top

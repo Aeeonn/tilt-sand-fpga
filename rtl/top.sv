@@ -1,21 +1,22 @@
 // =====================================================================
-// sand_falling :: top  — M3 Margolus engine (sand falls and piles)
+// sand_falling :: top  — M4 Interaction (brush + particle count + HEX)
 // =====================================================================
 // TILT-SAND falling-sand toy on the DE10-Lite.
 //
 //   pll_sys -> clk_100 (CA engine domain) + clk_25 (VGA pixel)
 //   reset_sync x2 (KEY[0] = async reset)
 //   vga_timing 640x480@60  (2x2 pixel-doubled view of the 320x240 grid)
-//   margolus_engine  scans grid in 2x2 blocks, applies block_rule, writes
-//                    back buffer; signals frame_done for double-buffer swap
-//   grid_mem      double-buffered 320x240x4bpp cell store (dual-clock BRAM)
-//   grid_scanout  pixel -> cell -> palette address (clk_25)
+//   margolus_engine  scans grid in 2x2 blocks, applies block_rule
+//   brush            injects material (KEY[1]) or clears grid (SW[9])
+//   particle_count   counts non-EMPTY cells for HEX display
+//   grid_mem         double-buffered 320x240x4bpp cell store
+//   grid_scanout     pixel -> cell -> palette address (clk_25)
 //   palette (256x12 RGB444, sand material colours) -> VGA DAC
-//   hex_driver x6 heartbeat
+//   hex_driver x6    particle count on HEX3:0, material on HEX5:4
 //   uart_rx/uart_monitor/uart_tx peek/poke debug channel
 //
-// M3: the engine drives grid_mem's write port + frame_done/swap handshake.
-// Sand falls under gravity and piles. See docs/SPEC_margolus_engine.md.
+// M4: interactive sandbox — KEY[1] spawns material (SW[5:2] selects),
+// SW[9] clears, SW[1:0] sets gravity direction, HEX shows particle count.
 // =====================================================================
 module top #(
 		parameter int FB_WIDTH  = 320,
@@ -130,8 +131,11 @@ module top #(
 	);
 
 	// -----------------------------------------------------------------
-	// M3: Margolus CA engine — reads front bank, writes back bank,
-	// signals frame_done; starts on swapped (buffer swap complete).
+	// M4: Interaction — brush + engine + particle_count sequencer
+	// -----------------------------------------------------------------
+	// Sequencing per frame:
+	//   swapped → brush (inject/clear if requested) → brush.done
+	//   → particle_count (scan front buffer) → pc.done → engine starts
 	// -----------------------------------------------------------------
 	logic [ADDR_BITS-1:0]  eng_rd_addr, eng_wr_addr;
 	logic [CELL_BITS-1:0]  eng_rd_data, eng_wr_data;
@@ -139,23 +143,150 @@ module top #(
 	logic                  grid_swapped;
 	logic [1:0]            grav_dir;
 
-	// Gravity direction from SW[1:0] (M3: fixed via switches)
+	// Gravity direction from SW[1:0]
 	assign grav_dir = SW[1:0];
 
-	// Engine starts when grid_mem confirms the swap (new back buffer ready).
-	// On the very first frame after reset, we also kick it with a one-shot.
-	logic first_start_q;
-	logic engine_start;
+	// --- Debounce KEY[1] for brush trigger ---
+	logic key1_db;
+	debounce #(.CLK_FREQ_HZ(100_000_000), .DEBOUNCE_MS(10)) u_key1_db (
+		.clk(clk_100), .rst_n(rst_n_100),
+		.in_raw(KEY[1]), .out(key1_db)
+	);
 
+	// KEY[1] is active-low: pressed = 0. Brush injects while pressed.
+	logic brush_inject, brush_clear;
+	assign brush_inject = ~key1_db;        // inject while KEY[1] held
+	assign brush_clear  = SW[9];           // clear when SW[9] is up
+
+	// Material select: SW[5:2]
+	logic [CELL_BITS-1:0] brush_material;
+	assign brush_material = SW[5:2];
+
+	// --- Brush instance ---
+	logic                  brush_wr_en, brush_busy, brush_done;
+	logic [ADDR_BITS-1:0]  brush_wr_addr;
+	logic [CELL_BITS-1:0]  brush_wr_data;
+
+	brush #(
+		.GRID_W(FB_WIDTH), .GRID_H(FB_HEIGHT), .CELL_BITS(CELL_BITS)
+	) u_brush (
+		.clk        (clk_100),
+		.rst_n      (rst_n_100),
+		.inject     (brush_inject),
+		.clear      (brush_clear),
+		.material   (brush_material),
+		.engine_busy(eng_busy),
+		.wr_en      (brush_wr_en),
+		.wr_addr    (brush_wr_addr),
+		.wr_data    (brush_wr_data),
+		.busy       (brush_busy),
+		.done       (brush_done)
+	);
+
+	// --- Particle counter instance ---
+	logic                  pc_busy, pc_done, pc_start;
+	logic [ADDR_BITS-1:0]  pc_rd_addr;
+	logic [CELL_BITS-1:0]  pc_rd_data;
+	logic [15:0]           particle_cnt;
+
+	particle_count #(
+		.GRID_W(FB_WIDTH), .GRID_H(FB_HEIGHT), .CELL_BITS(CELL_BITS)
+	) u_pc (
+		.clk    (clk_100),
+		.rst_n  (rst_n_100),
+		.start  (pc_start),
+		.rd_addr(pc_rd_addr),
+		.rd_data(pc_rd_data),
+		.count  (particle_cnt),
+		.busy   (pc_busy),
+		.done   (pc_done)
+	);
+
+	// --- Frame sequencer ---
+	// State: after swapped, run brush -> then particle_count -> then engine
+	typedef enum logic [2:0] {
+		SEQ_WAIT_SWAP,
+		SEQ_BRUSH,
+		SEQ_COUNT,
+		SEQ_ENGINE
+	} seq_state_e;
+
+	seq_state_e seq_state;
+	logic       engine_start;
+
+	always_ff @(posedge clk_100 or negedge rst_n_100) begin
+		if (!rst_n_100) begin
+			seq_state <= SEQ_WAIT_SWAP;
+		end else begin
+			case (seq_state)
+				SEQ_WAIT_SWAP: begin
+					if (grid_swapped)
+						seq_state <= SEQ_BRUSH;
+				end
+				SEQ_BRUSH: begin
+					if (brush_done)
+						seq_state <= SEQ_COUNT;
+				end
+				SEQ_COUNT: begin
+					if (pc_done)
+						seq_state <= SEQ_ENGINE;
+				end
+				SEQ_ENGINE: begin
+					// Engine will start; wait for it to finish + swap
+					if (eng_frame_done)
+						seq_state <= SEQ_WAIT_SWAP;
+				end
+				default: seq_state <= SEQ_WAIT_SWAP;
+			endcase
+		end
+	end
+
+	// First-frame kickstart (before any swap has occurred)
+	logic first_start_q;
 	always_ff @(posedge clk_100 or negedge rst_n_100) begin
 		if (!rst_n_100)
 			first_start_q <= 1'b0;
-		else if (!first_start_q && !eng_busy)
+		else if (!first_start_q && !eng_busy && !brush_busy && !pc_busy)
 			first_start_q <= 1'b1;
 	end
 
-	assign engine_start = grid_swapped | (~first_start_q & ~eng_busy);
+	assign engine_start = (seq_state == SEQ_ENGINE && !eng_busy) |
+	                       (~first_start_q & ~eng_busy & ~brush_busy & ~pc_busy);
+	assign pc_start     = (seq_state == SEQ_BRUSH && brush_done);
 
+	// --- Write port mux: brush has priority when busy ---
+	logic                 grid_wr_en;
+	logic [ADDR_BITS-1:0] grid_wr_addr;
+	logic [CELL_BITS-1:0] grid_wr_data;
+
+	always_comb begin
+		if (brush_busy) begin
+			grid_wr_en   = brush_wr_en;
+			grid_wr_addr = brush_wr_addr;
+			grid_wr_data = brush_wr_data;
+		end else begin
+			grid_wr_en   = eng_wr_en;
+			grid_wr_addr = eng_wr_addr;
+			grid_wr_data = eng_wr_data;
+		end
+	end
+
+	// --- Read port mux: particle_count reads front when busy ---
+	logic [ADDR_BITS-1:0] grid_rd_addr;
+	logic [CELL_BITS-1:0] eng_rd_data_raw;
+
+	always_comb begin
+		if (pc_busy)
+			grid_rd_addr = pc_rd_addr;
+		else
+			grid_rd_addr = eng_rd_addr;
+	end
+
+	// rd_data goes to both; they only use it when active
+	assign eng_rd_data = pc_busy ? '0 : eng_rd_data_raw;
+	assign pc_rd_data  = eng_rd_data_raw;
+
+	// --- Engine instance ---
 	margolus_engine #(
 		.GRID_W(FB_WIDTH), .GRID_H(FB_HEIGHT), .CELL_BITS(CELL_BITS)
 	) u_engine (
@@ -172,19 +303,19 @@ module top #(
 		.busy      (eng_busy)
 	);
 
+	// --- Grid memory ---
 	grid_mem #(
 		.GRID_W(FB_WIDTH), .GRID_H(FB_HEIGHT), .CELL_BITS(CELL_BITS),
 		.INIT0_FILE("sim/golden/test_grid.mif"),
 		.INIT1_FILE("sim/golden/empty_grid.mif")
 	) u_grid (
-		// CA / system domain — driven by margolus_engine
 		.clk_a     (clk_100),
 		.rst_n_a   (rst_n_100),
-		.rd_addr   (eng_rd_addr),
-		.rd_data   (eng_rd_data),
-		.wr_en     (eng_wr_en),
-		.wr_addr   (eng_wr_addr),
-		.wr_data   (eng_wr_data),
+		.rd_addr   (grid_rd_addr),
+		.rd_data   (eng_rd_data_raw),
+		.wr_en     (grid_wr_en),
+		.wr_addr   (grid_wr_addr),
+		.wr_data   (grid_wr_data),
 		.frame_done(eng_frame_done),
 		.swapped   (grid_swapped),
 		.front_a   (),
@@ -229,22 +360,15 @@ module top #(
 	assign VGA_B  = vid_q ? pal_b : 4'h0;
 
 	// -----------------------------------------------------------------
-	// HEX heartbeat (clk_100): rolling counter on all six digits, so a
-	// dead clock/reset is obvious at a glance.
+	// HEX display (clk_100): particle count on HEX3:0, material on HEX5:4
 	// -----------------------------------------------------------------
-	logic [27:0] heartbeat_q;
-	always_ff @(posedge clk_100 or negedge rst_n_100) begin
-		if (!rst_n_100) heartbeat_q <= '0;
-		else            heartbeat_q <= heartbeat_q + 28'd1;
-	end
-
 	logic [6:0] hex_seg [6];
-	hex_driver u_hex0 (.value(heartbeat_q[ 7: 4]), .seg(hex_seg[0]));
-	hex_driver u_hex1 (.value(heartbeat_q[11: 8]), .seg(hex_seg[1]));
-	hex_driver u_hex2 (.value(heartbeat_q[15:12]), .seg(hex_seg[2]));
-	hex_driver u_hex3 (.value(heartbeat_q[19:16]), .seg(hex_seg[3]));
-	hex_driver u_hex4 (.value(heartbeat_q[23:20]), .seg(hex_seg[4]));
-	hex_driver u_hex5 (.value(heartbeat_q[27:24]), .seg(hex_seg[5]));
+	hex_driver u_hex0 (.value(particle_cnt[ 3: 0]), .seg(hex_seg[0]));
+	hex_driver u_hex1 (.value(particle_cnt[ 7: 4]), .seg(hex_seg[1]));
+	hex_driver u_hex2 (.value(particle_cnt[11: 8]), .seg(hex_seg[2]));
+	hex_driver u_hex3 (.value(particle_cnt[15:12]), .seg(hex_seg[3]));
+	hex_driver u_hex4 (.value(brush_material),       .seg(hex_seg[4]));
+	hex_driver u_hex5 (.value({2'b0, grav_dir}),     .seg(hex_seg[5]));
 
 	assign HEX0 = {1'b1, hex_seg[0]};   // bit 7 = decimal point (off)
 	assign HEX1 = {1'b1, hex_seg[1]};
@@ -278,11 +402,8 @@ module top #(
 	);
 
 	// -----------------------------------------------------------------
-	// LEDR: echo the switches so the SW row is visibly wired, plus a
-	// slow heartbeat blink on LEDR[9].
+	// LEDR: SW echo + engine busy + brush busy indicators
 	// -----------------------------------------------------------------
-	assign LEDR = {heartbeat_q[26], SW[8:0]};
-
-	// KEY[1] is reserved for the brush/clear button (M4); unused here.
+	assign LEDR = {eng_busy, brush_busy, SW[7:0]};
 
 endmodule

@@ -44,13 +44,14 @@ Gravity DOWN means material falls from row 0 to row 1.
 Implementation: rotate the input block so the gravity direction maps to the
 canonical DOWN orientation, apply the DOWN rule, then rotate the result back.
 
-## M3 materials (MVP)
+## Materials
 
 | ID | Name | Density | Behavior |
 |----|------|---------|----------|
 | 0 | EMPTY | 0 | Vacuum; anything falls into it |
 | 1 | WALL | ∞ | Immovable; never participates in swaps |
-| 2 | SAND | 2 | Falls straight down; slides diagonally if blocked below |
+| 2 | SAND | 2 | Granular: falls, slides diagonally, sinks through water |
+| 3 | WATER | 1 | Fluid: falls into EMPTY, spreads laterally; displaced by SAND |
 
 ## Rules (gravity = DOWN, canonical orientation)
 

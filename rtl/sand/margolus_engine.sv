@@ -55,6 +55,7 @@ module margolus_engine #(
 		S_READ2,   // issue addr for c10, capture c01
 		S_READ3,   // issue addr for c11, capture c10
 		S_APPLY,   // capture c11, block_rule is combinational
+		S_RESULT,  // register block_rule output (breaks combinational depth)
 		S_WRITE0,  // write n00
 		S_WRITE1,  // write n01
 		S_WRITE2,  // write n10
@@ -71,6 +72,7 @@ module margolus_engine #(
 	logic [BX_BITS-1:0]  bx_q;              // block x coordinate
 	logic [BY_BITS-1:0]  by_q;              // block y coordinate
 	logic [CELL_BITS-1:0] c00_q, c01_q, c10_q, c11_q;  // captured cells
+	logic [CELL_BITS-1:0] n00_q, n01_q, n10_q, n11_q;  // registered block_rule output
 
 	// Pre-computed and registered addresses for the current block
 	logic [ADDR_BITS-1:0] addr_c00_q, addr_c01_q, addr_c10_q, addr_c11_q;
@@ -188,34 +190,39 @@ module margolus_engine #(
 			S_APPLY: begin
 				// c11 captured this cycle; block_rule output (n*) valid
 				lfsr_en = 1'b1;   // advance LFSR for next block
+				state_d = S_RESULT;
+			end
+
+			S_RESULT: begin
+				// block_rule outputs registered on this edge (see sequential block)
 				state_d = S_WRITE0;
 			end
 
 			S_WRITE0: begin
 				wr_en   = 1'b1;
 				wr_addr = addr_c00_q;
-				wr_data = n00;
+				wr_data = n00_q;
 				state_d = S_WRITE1;
 			end
 
 			S_WRITE1: begin
 				wr_en   = 1'b1;
 				wr_addr = addr_c01_q;
-				wr_data = n01;
+				wr_data = n01_q;
 				state_d = S_WRITE2;
 			end
 
 			S_WRITE2: begin
 				wr_en   = 1'b1;
 				wr_addr = addr_c10_q;
-				wr_data = n10;
+				wr_data = n10_q;
 				state_d = S_WRITE3;
 			end
 
 			S_WRITE3: begin
 				wr_en   = 1'b1;
 				wr_addr = addr_c11_q;
-				wr_data = n11;
+				wr_data = n11_q;
 				state_d = S_NEXT;
 			end
 
@@ -246,6 +253,10 @@ module margolus_engine #(
 			c01_q       <= '0;
 			c10_q       <= '0;
 			c11_q       <= '0;
+			n00_q       <= '0;
+			n01_q       <= '0;
+			n10_q       <= '0;
+			n11_q       <= '0;
 			addr_c00_q  <= '0;
 			addr_c01_q  <= '0;
 			addr_c10_q  <= '0;
@@ -280,6 +291,14 @@ module margolus_engine #(
 				S_APPLY: c11_q <= rd_data;
 				default: ;
 			endcase
+
+			// Register block_rule outputs in S_RESULT (c11_q is now valid)
+			if (state == S_RESULT) begin
+				n00_q <= n00;
+				n01_q <= n01;
+				n10_q <= n10;
+				n11_q <= n11;
+			end
 
 			// Block coordinate advancement
 			case (state)

@@ -13,8 +13,8 @@ project directory.
 | **M1** — Cleanup + platform baseline | Hard-delete raycast core + SDRAM/fb pipeline; rename project to `sand_falling`; validate kept files; skeleton `top` = PLL + reset + VGA timing + sand palette + HEX heartbeat + UART, showing a 16-material colour-bar test pattern. | Pruned tree builds clean; STA closed; bars on VGA. | **DONE — compiles clean (HW pattern pending flash)** |
 | **M2** — Grid memory + scanout | `grid_mem` (double-buffered 320×240×4bpp dual-clock BRAM, front-select + vsync swap) + `grid_scanout` (cell→pixel). Replace the bar generator; display a preloaded static test grid. | "Grid is the framebuffer" path verified in sim (pixel-exact) + on HW. | **DONE in sim + synthesis — tb_top pixel-exact 420998/420998, compiles clean; HW flash pending (USB-Blaster not detected)** |
 | **M3** — Margolus engine, sand only | `margolus_engine` + `block_rule` (EMPTY/WALL/SAND), gravity fixed DOWN, `lfsr` tie-break. Sand falls and piles. | Bit-exact vs Python stepper; **mass-conservation SVA** holds; piling visible on HW. | **DONE in sim + synthesis — 14/14 unit TBs + tb_top pixel-exact; compiles clean, STA closed; HW flash pending** |
-| **M4** — Interaction | `brush` injector + SW material select + KEY spawn + clear; 4-way gravity from SW; particle count on HEX. | Interactive sandbox on HW. | NOT STARTED |
-| **M5** — Water | Add WATER: fluid lateral spread + sand/water density swap. | Two-material dynamics, mass-conserving, on HW. | NOT STARTED |
+| **M4** — Interaction | `brush` injector + SW material select + KEY spawn + clear; 4-way gravity from SW; particle count on HEX. | Interactive sandbox on HW. | **DONE in sim + synthesis — 16/16 unit TBs; compiles clean, STA closed; HW flash pending** |
+| **M5** — Water | Add WATER: fluid lateral spread + sand/water density swap. | Two-material dynamics, mass-conserving, on HW. | **DONE in sim + synthesis — 16/16 TBs (block_rule 2048/2048); compiles clean, STA closed; HW flash pending** |
 | **M6** — Tilt (the headline) | `adxl345_spi` master + `gravity_ctrl` (tilt vector → gravity dir; 4-way → 8-way → probabilistic). | Board tilt visibly steers gravity on HW. | NOT STARTED |
 | **M7** — Reactive materials | FIRE/OIL/ACID/PLANT/… via `block_rule` reactions (golden tracks transmutation). | Rich sandbox; reactions verified vs golden. | NOT STARTED |
 | **Stretch** | Pressure/temperature fields; electricity (SPARK) + logic-gate materials (CA-ception); save dishes to UFM; bigger grid via SDRAM (restore from original); two-board vessel over GPIO. | — | — |
@@ -32,6 +32,8 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
 | M1 skeleton | 2026-06-15 | 471 | 0 | 0 | 168.0 MHz | 325.8 MHz | kept platform TBs unchanged; tb_top re-added in M2 | not yet (skeleton .sof ready to flash) |
 | M2 grid_mem + scanout | 2026-06-15 | 548 | 307,392 | 0 | 158.0 MHz | 98.97 MHz | 12/12 TBs; tb_top pixel-exact 420998/420998 | flash pending (board not detected) |
 | M3 margolus_engine | 2026-06-16 | 997 | 614,592 | 0 | 101.3 MHz | 78.1 MHz | 15/15 TBs (14 unit + tb_top); mass conservation 14/14 | flash pending |
+| M4 interaction | 2026-06-16 | 1,341 | 614,592 | 0 | 100.7 MHz | 84.2 MHz | 16/16 TBs (brush 6/6, particle_count 5/5) | flash pending |
+| M5 water | 2026-06-16 | 1,404 | 614,592 | 0 | 105.7 MHz | 81.4 MHz | 16/16 TBs (block_rule 2048/2048 incl. WATER) | flash pending |
 
 ## M1 notes (2026-06-15)
 
@@ -127,3 +129,59 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
   615 Kbit (both banks), matching the budgeted 37%.
 - **Next**: M4 — interaction (`brush` injector, material select, KEY spawn/clear,
   4-way gravity from SW, particle count on HEX).
+
+## M4 notes (2026-06-16)
+
+- **New RTL** (`rtl/sand/`): `brush` (particle emitter: inject 3×3 patch at
+  center-top via KEY[1], or clear grid + re-draw WALL border via SW[9];
+  pre-computed patch addresses to avoid runtime multiply), `particle_count`
+  (sequential scan of front buffer counting non-EMPTY cells; 16-bit saturating
+  count output for HEX display).
+- **Integration** (`top.sv`): frame sequencer FSM
+  (`SEQ_WAIT_SWAP → SEQ_BRUSH → SEQ_COUNT → SEQ_ENGINE`) orchestrates the three
+  port-A consumers (brush writes, particle_count reads, engine reads+writes).
+  Write-port mux gives brush priority when busy; read-port mux gives
+  particle_count priority when busy. `debounce` on KEY[1]. HEX3:0 = particle
+  count (hex), HEX4 = material selector (SW[5:2]), HEX5 = gravity dir.
+  LEDR[9] = engine busy, LEDR[8] = brush busy, LEDR[7:0] = SW echo.
+- **Controls**: SW[1:0] = gravity direction (DOWN/UP/LEFT/RIGHT), SW[5:2] =
+  material selector, SW[9] = clear, KEY[1] = inject.
+- **Timing fix**: same `row*GRID_W` multiply issue as M3. Brush uses
+  pre-computed `PATCH_ADDR` constants for inject and an incremental
+  `row_base_q += GRID_W` for the border scan — no runtime multiply.
+- **New TBs**: `tb_brush` (6/6 — inject writes, clear fills, engine_busy blocks,
+  done signal), `tb_particle_count` (5/5 — correct count for mixed grid, zero
+  for empty grid, busy/done signals).
+- **Compile**: `quartus_sh --flow compile` → **0 errors**. Fitter: 1,341 LEs (3%),
+  496 regs, **614,592 M9K bits (37%)**, 0 DSP, 1/4 PLLs, 87 pins. STA: **all
+  corners positive**; Fmax clk_100 = 100.7 MHz (need 100), clk_25 = 84.2 MHz
+  (need 25); worst slack +0.066 ns. `sand_falling.sof` produced.
+- **Next**: M5 — Water (fluid lateral spread + sand/water density swap).
+
+## M5 notes (2026-06-16)
+
+- **block_rule update**: added WATER (ID=3) with density-based physics. Three
+  phases in canonical-DOWN orientation:
+  1. **Vertical fall**: SAND falls into EMPTY or WATER; WATER falls into EMPTY.
+     (Density ordering: EMPTY < WATER < SAND. WALL immovable.)
+  2. **Diagonal slide** (granular, SAND only): SAND slides when blocked below
+     by non-displaceable (WALL/SAND, not WATER).
+  3. **Lateral spread** (fluid, WATER only): WATER spreads sideways in row 0
+     when blocked below; WATER spreads sideways in row 1 unconditionally.
+     `rnd` breaks symmetric ties.
+- **Golden**: `block_rule.py` updated with `_falls_into()` density function;
+  exhaustive vectors now 4 materials × 4^4 × 4 gravities × 2 rnd = **2048**
+  (up from 648). All conserve mass.
+- **Timing fix**: the three-phase combinational depth of block_rule exceeded
+  the 10 ns budget (-1.334 ns slack). Added `S_RESULT` pipeline state in
+  `margolus_engine` between S_APPLY and S_WRITE0 to register block_rule outputs.
+  This also corrected a latent c11_q race (block_rule was reading c11_q the same
+  cycle it was being written; the extra cycle ensures it’s stable). Post-fix:
+  STA closed at +0.535 ns, Fmax 105.7 MHz.
+- **Compile**: `quartus_sh --flow compile` → **0 errors**. Fitter: 1,404 LEs (3%),
+  513 regs, **614,592 M9K bits (37%)**, 0 DSP, 1/4 PLLs, 87 pins. STA: **all
+  corners positive**; Fmax clk_100 = 105.7 MHz, clk_25 = 81.4 MHz; worst slack
+  +0.535 ns. `sand_falling.sof` produced.
+- **LE growth**: +63 LEs from M4 (mostly the extra comparators for WATER density
+  and the lateral-spread logic); +17 registers (the n00_q..n11_q pipeline stage).
+- **Next**: M6 — Tilt (ADXL345 SPI + gravity_ctrl).
