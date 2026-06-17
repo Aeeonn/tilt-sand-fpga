@@ -1,8 +1,8 @@
 // 256x12 palette ROM: addr = 8bpp pixel value, data = {R[3:0],G[3:0],B[3:0]}.
-// Initialized from sim/golden/framebuffer_palette.mem (grayscale ramp,
-// palette[i] = {i[7:4], i[7:4], i[7:4]}). See docs/SPEC_framebuffer.md.
+// Initialized from sim/golden/sand_palette.mem (16 sand-material colours in
+// entries 0..15, black elsewhere). Material id i maps to palette entry i.
 module palette #(
-		parameter PALETTE_FILE = "framebuffer_palette.mem"
+		parameter PALETTE_FILE = "sand_palette.mem"
 ) (
 		input  logic       clk,
 		input  logic [7:0] addr,

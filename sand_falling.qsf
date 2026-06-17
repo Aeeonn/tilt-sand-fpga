@@ -208,6 +208,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/gravity_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/bram_tdp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/grid_mem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/grid_scanout.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/hud_overlay.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/lfsr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/block_rule.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/margolus_engine.sv

@@ -95,13 +95,17 @@ module tb_top;
 				if (f2) begin
 					exp = expected_rgb(d2px, d2py, d2von);
 					act = {VGA_R, VGA_G, VGA_B};
-					if (act === exp) pass_count++;
-					else begin
-						fail_count++;
-						if (printed < MAXP) begin
-							$display("FAIL px(%0d,%0d) von=%0b exp %03h got %03h @%0t",
-											 d2px, d2py, d2von, exp, act, $time);
-							printed++;
+					// Rows 0..15 carry the HUD overlay (verified separately by
+					// tb_hud_overlay); exclude them from the grid pixel-exact check.
+					if (!d2von || d2py > 15) begin
+						if (act === exp) pass_count++;
+						else begin
+							fail_count++;
+							if (printed < MAXP) begin
+								$display("FAIL px(%0d,%0d) von=%0b exp %03h got %03h @%0t",
+												 d2px, d2py, d2von, exp, act, $time);
+								printed++;
+							end
 						end
 					end
 					if (d2von && d2px < VISW && d2py < VISH)

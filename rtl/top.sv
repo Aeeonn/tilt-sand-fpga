@@ -14,6 +14,8 @@
 //   grid_mem         double-buffered 320x240x4bpp cell store
 //   grid_scanout     pixel -> cell -> palette address (clk_25)
 //   palette (256x12 RGB444, sand material colours) -> VGA DAC
+//   hud_overlay      on-screen status bar (material swatch, gravity
+//                    D-pad, particle-count bar) composited over the grid
 //   hex_driver x6    particle count on HEX3:0, material on HEX5:4
 //   uart_rx/uart_monitor/uart_tx peek/poke debug channel
 //
@@ -412,11 +414,87 @@ module top #(
 		end
 	end
 
+	// -----------------------------------------------------------------
+	// HUD status overlay (clk_25): material swatch + gravity D-pad +
+	// particle-count bar drawn across the top of the screen. See
+	// docs/SPEC_hud_overlay.md.
+	// -----------------------------------------------------------------
+	// Sample the (quasi-static) status values into the pixel domain.
+	// CDC: clk_100 / async SW -> clk_25, display-only (a 1-frame tear is
+	// invisible). 2-FF for metastability; clk groups already async in SDC.
+	logic [3:0]  hud_mat_s1,  hud_mat_q;
+	logic [1:0]  hud_grav_s1, hud_grav_q;
+	logic [15:0] hud_cnt_s1,  hud_cnt_q;
+	always_ff @(posedge clk_25 or negedge rst_n_25) begin
+		if (!rst_n_25) begin
+			hud_mat_s1  <= '0; hud_mat_q  <= '0;
+			hud_grav_s1 <= '0; hud_grav_q <= '0;
+			hud_cnt_s1  <= '0; hud_cnt_q  <= '0;
+		end else begin
+			hud_mat_s1  <= brush_material; hud_mat_q  <= hud_mat_s1;
+			hud_grav_s1 <= grav_dir;       hud_grav_q <= hud_grav_s1;
+			hud_cnt_s1  <= particle_cnt;   hud_cnt_q  <= hud_cnt_s1;
+		end
+	end
+
+	// Second palette read: the selected material's colour for the swatch.
+	logic [3:0] hud_r, hud_g, hud_b;
+	palette #(
+		.PALETTE_FILE("sim/golden/sand_palette.mem")
+	) u_palette_hud (
+		.clk  (clk_25),
+		.addr ({4'b0, hud_mat_q}),
+		.red  (hud_r),
+		.green(hud_g),
+		.blue (hud_b)
+	);
+
+	// Overlay generator (combinational from the current pixel position).
+	logic        ov_on;
+	logic [11:0] ov_rgb;
+	hud_overlay u_hud (
+		.pixel_x  (pixel_x),
+		.pixel_y  (pixel_y),
+		.sel_color({hud_r, hud_g, hud_b}),
+		.grav_dir (hud_grav_q),
+		.count    (hud_cnt_q),
+		.ov_on    (ov_on),
+		.ov_rgb   (ov_rgb)
+	);
+
+	// Delay the overlay by 2 cycles so it aligns with the grid palette
+	// output (scanout +1 BRAM, palette +1 = 2-cycle datapath latency).
+	logic        ov_on_d1,  ov_on_q;
+	logic [11:0] ov_rgb_d1, ov_rgb_q;
+	always_ff @(posedge clk_25 or negedge rst_n_25) begin
+		if (!rst_n_25) begin
+			ov_on_d1  <= 1'b0; ov_on_q  <= 1'b0;
+			ov_rgb_d1 <= '0;   ov_rgb_q <= '0;
+		end else begin
+			ov_on_d1  <= ov_on;  ov_on_q  <= ov_on_d1;
+			ov_rgb_d1 <= ov_rgb; ov_rgb_q <= ov_rgb_d1;
+		end
+	end
+
+	// Composite: overlay on top of the grid colour, both gated by video_on.
+	logic [3:0] out_r, out_g, out_b;
+	always_comb begin
+		if (ov_on_q) begin
+			out_r = ov_rgb_q[11:8];
+			out_g = ov_rgb_q[7:4];
+			out_b = ov_rgb_q[3:0];
+		end else begin
+			out_r = pal_r;
+			out_g = pal_g;
+			out_b = pal_b;
+		end
+	end
+
 	assign VGA_HS = hs_q;
 	assign VGA_VS = vs_q;
-	assign VGA_R  = vid_q ? pal_r : 4'h0;
-	assign VGA_G  = vid_q ? pal_g : 4'h0;
-	assign VGA_B  = vid_q ? pal_b : 4'h0;
+	assign VGA_R  = vid_q ? out_r : 4'h0;
+	assign VGA_G  = vid_q ? out_g : 4'h0;
+	assign VGA_B  = vid_q ? out_b : 4'h0;
 
 	// -----------------------------------------------------------------
 	// HEX display (clk_100): particle count on HEX3:0, material on HEX5:4

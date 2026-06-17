@@ -35,6 +35,7 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
 | M4 interaction | 2026-06-16 | 1,341 | 614,592 | 0 | 100.7 MHz | 84.2 MHz | 16/16 TBs (brush 6/6, particle_count 5/5) | flash pending |
 | M5 water | 2026-06-16 | 1,404 | 614,592 | 0 | 105.7 MHz | 81.4 MHz | 16/16 TBs (block_rule 2048/2048 incl. WATER) | flash pending |
 | M6 tilt (ADXL345) | 2026-06-16 | 1,592 | 614,592 | 0 | 101.4 MHz | 82.0 MHz | 18/18 TBs (adxl345_spi 6/6, gravity_ctrl 10/10) | flash pending |
+| M6+ HUD overlay | 2026-06-17 | 1,720 | 614,784 | 0 | 103.0 MHz | 68.4 MHz | 19/19 TBs + tb_top 409921/409921 (hud_overlay 13/13) | flash pending |
 
 ## M1 notes (2026-06-15)
 
@@ -212,3 +213,27 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
 - **LE growth**: +188 LEs from M5 (SPI shift register, clock divider, poll timer,
   FSM, gravity_ctrl comparators). +104 registers.
 - **Next**: M7 — Reactive materials (FIRE/OIL/ACID/PLANT via block_rule reactions).
+
+## HUD + physics polish (2026-06-17)
+
+- **Physics fix** (`block_rule`): generalized Phase 2 from "diagonal slide, SAND
+  only" to "diagonal flow, any mobile cell". Water previously got stuck on sand
+  ledges (could only fall straight or spread laterally) and blocked sand from
+  draining; now water flows diagonally around obstacles. All materials 4–15 fall
+  as granular solids (density 2). Exhaustive 2048/2048 still conserves mass.
+- **New RTL** (`rtl/sand/hud_overlay.sv`): pure-combinational on-screen status
+  bar across the top 16 pixel rows — material swatch (colour you'll spawn),
+  gravity D-pad (active direction lit), particle-count bar (fills with activity).
+  `top.sv` adds a second `palette` (for the swatch colour), 2-FF CDC of the
+  status values into clk_25, a 2-cycle align delay, and a composite mux over the
+  grid colour.
+- **New TB**: `tb_hud_overlay` (13/13 — swatch fill/frame, all four gravity dots
+  active vs dim, bar empty/filled/frame, no overlay below the HUD).
+- **tb_top** updated to exclude rows 0–15 (HUD region) from the grid pixel-exact
+  check; still 409921/409921 PASS on the grid below the HUD.
+- **Sequencer fix**: first-frame kickstart now also advances the sequencer FSM
+  out of SEQ_WAIT_SWAP (it previously deadlocked waiting for a swap that needs
+  the engine, which needs the sequencer — chicken-and-egg, static screen on HW).
+- **Compile**: 0 errors. Fitter: 1,720 LEs (3%), 681 regs, 614,784 M9K bits, 0
+  DSP, 1/4 PLLs. STA closed: Fmax clk_100 103.0 MHz, clk_25 68.4 MHz (need 25),
+  worst slack +0.294 ns. 19/19 unit TBs + tb_top pass.
