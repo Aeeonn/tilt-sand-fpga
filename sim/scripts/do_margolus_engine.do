@@ -7,7 +7,7 @@ if {![file exists sim/work]} {
 }
 vmap work sim/work
 
-vlog -sv rtl/sand/lfsr.sv rtl/sand/block_rule.sv rtl/sand/margolus_engine.sv
+vlog -sv rtl/sand/lfsr.sv rtl/sand/block_rule_fall.sv rtl/sand/block_rule_settle.sv rtl/sand/block_rule.sv rtl/sand/margolus_engine.sv
 vlog -sv sim/tb/tb_margolus_engine.sv
 
 vsim -c work.tb_margolus_engine

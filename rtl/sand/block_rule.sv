@@ -1,167 +1,70 @@
 // =====================================================================
-// block_rule — Margolus 2×2 block physics (pure combinational)
+// block_rule — Margolus 2×2 block physics (combinational wrapper)
 // =====================================================================
 // Given a 2×2 block of cells, gravity direction, and a random bit,
 // produces the updated block after one CA step. Materials are permuted
 // (never created/destroyed) — multiset conservation is structural.
 //
 // Materials: EMPTY(0), WALL(1), SAND(2), WATER(3), and 4-15 (granular).
-// Density: EMPTY(0) < WATER(1) < SAND/others(2). WALL never moves.
-// Phases: vertical fall → diagonal flow (any mobile cell) → lateral
-// spread (WATER only). See docs/SPEC_block_rule.md.
+// Density: EMPTY(0) < WATER(1) < SAND/others(2) < WALL(3, immovable).
+//
+// Four sequential phases, split across two sub-modules so the engine can
+// pipeline them across two clock cycles for timing closure:
+//   block_rule_fall   — 1. vertical fall   2. water diagonal
+//   block_rule_settle — 3. water level     4. sand diagonal
+//
+// This wrapper rotates the block to the canonical-DOWN orientation, chains
+// both stages combinationally, and rotates back. It is the reference for
+// tb_block_rule and matches sim/golden/block_rule.py. margolus_engine
+// instead instantiates the two stages with a register between them.
+// See docs/SPEC_block_rule.md.
 // =====================================================================
 module block_rule #(
 		parameter int CELL_BITS = 4
 ) (
 		input  logic [1:0]           grav_dir,   // 0=DOWN 1=UP 2=LEFT 3=RIGHT
-		input  logic                 rnd,        // tie-break bit
+		input  logic                 rnd,        // tie-break / probability bit
 		input  logic [CELL_BITS-1:0] c00, c01,   // top-left, top-right
 		                             c10, c11,   // bottom-left, bottom-right
 		output logic [CELL_BITS-1:0] n00, n01,
 		                             n10, n11
 );
 
-	// Material IDs (must match sand_materials.py)
-	localparam logic [CELL_BITS-1:0] MAT_EMPTY = 4'd0;
-	localparam logic [CELL_BITS-1:0] MAT_WALL  = 4'd1;
-	localparam logic [CELL_BITS-1:0] MAT_SAND  = 4'd2;
-	localparam logic [CELL_BITS-1:0] MAT_WATER = 4'd3;
-
-	// --- Helper: density lookup (higher = heavier, sinks) ---
-	// EMPTY=0, WATER=1, all other mobile materials=2. WALL=special (immovable).
-	function automatic logic [1:0] density(input logic [CELL_BITS-1:0] mat);
-		case (mat)
-			MAT_EMPTY: return 2'd0;
-			MAT_WATER: return 2'd1;
-			MAT_WALL:  return 2'd0;  // unused — wall checked separately
-			default:   return 2'd2;  // SAND + all materials 4-15: granular solid
-		endcase
-	endfunction
-
-	// --- Helper: is this cell movable (not EMPTY, not WALL)? ---
-	function automatic logic is_mobile(input logic [CELL_BITS-1:0] mat);
-		return (mat != MAT_EMPTY) && (mat != MAT_WALL);
-	endfunction
-
-	// --- Helper: "falls into" — src is heavier and mobile, dst is lighter ---
-	function automatic logic falls_into(input logic [CELL_BITS-1:0] src, dst);
-		// WALL never moves; nothing falls into WALL
-		if (src == MAT_WALL || dst == MAT_WALL) return 1'b0;
-		if (src == MAT_EMPTY) return 1'b0;
-		// src falls into dst if src has higher density
-		return density(src) > density(dst);
-	endfunction
-
-	// --- Rotate input block to canonical DOWN orientation ---
-	logic [CELL_BITS-1:0] r00, r01, r10, r11;
-
+	// Rotate input so gravity maps to DOWN (a=TL b=TR c=BL d=BR).
+	logic [CELL_BITS-1:0] a, b, c, d;
 	always_comb begin
 		case (grav_dir)
-			2'd0: begin r00 = c00; r01 = c01; r10 = c10; r11 = c11; end
-			2'd1: begin r00 = c11; r01 = c10; r10 = c01; r11 = c00; end
-			2'd2: begin r00 = c10; r01 = c00; r10 = c11; r11 = c01; end
-			2'd3: begin r00 = c01; r01 = c11; r10 = c00; r11 = c10; end
-			default: begin r00 = c00; r01 = c01; r10 = c10; r11 = c11; end
+			2'd0: begin a = c00; b = c01; c = c10; d = c11; end  // DOWN
+			2'd1: begin a = c11; b = c10; c = c01; d = c00; end  // UP    (180°)
+			2'd2: begin a = c10; b = c00; c = c11; d = c01; end  // LEFT  (CW)
+			2'd3: begin a = c01; b = c11; c = c00; d = c10; end  // RIGHT (CCW)
+			default: begin a = c00; b = c01; c = c10; d = c11; end
 		endcase
 	end
 
-	// --- Phase 1: vertical fall (each column independently) ---
-	logic [CELL_BITS-1:0] v00, v01, v10, v11;
+	// Stage 1: fall + water diagonal.
+	logic [CELL_BITS-1:0] f_a, f_b, f_c, f_d;
+	block_rule_fall #(.CELL_BITS(CELL_BITS)) u_fall (
+		.a_i(a), .b_i(b), .c_i(c), .d_i(d),
+		.a_o(f_a), .b_o(f_b), .c_o(f_c), .d_o(f_d)
+	);
 
-	always_comb begin
-		v00 = r00; v01 = r01; v10 = r10; v11 = r11;
+	// Stage 2: water level + sand diagonal.
+	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
+	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
+		.rnd(rnd),
+		.a_i(f_a), .b_i(f_b), .c_i(f_c), .d_i(f_d),
+		.a_o(s_a), .b_o(s_b), .c_o(s_c), .d_o(s_d)
+	);
 
-		// Left column
-		if (falls_into(r00, r10)) begin
-			v00 = r10;
-			v10 = r00;
-		end
-
-		// Right column
-		if (falls_into(r01, r11)) begin
-			v01 = r11;
-			v11 = r01;
-		end
-	end
-
-	// --- Phase 2: diagonal flow (any mobile material) ---
-	// After phase 1, a mobile cell still in row 0 is blocked straight down
-	// (otherwise it would have fallen). It flows into an EMPTY diagonal cell.
-	// This makes sand pile at an angle of repose AND lets water drain around
-	// obstacles instead of getting stuck on ledges (fixes "stuck water").
-	logic [CELL_BITS-1:0] d00, d01, d10, d11;
-	logic left_can, right_can;
-
-	always_comb begin
-		d00 = v00; d01 = v01; d10 = v10; d11 = v11;
-
-		// Left-top flows to bottom-right; right-top flows to bottom-left.
-		// Blocked straight down (v1x != EMPTY) + diagonal open (opposite EMPTY).
-		left_can  = is_mobile(v00) && (v10 != MAT_EMPTY) && (v11 == MAT_EMPTY);
-		right_can = is_mobile(v01) && (v11 != MAT_EMPTY) && (v10 == MAT_EMPTY);
-
-		if (left_can && right_can) begin
-			if (rnd) begin
-				d00 = v11; d11 = v00;
-			end else begin
-				d01 = v10; d10 = v01;
-			end
-		end else if (left_can) begin
-			d00 = v11; d11 = v00;
-		end else if (right_can) begin
-			d01 = v10; d10 = v01;
-		end
-	end
-
-	// --- Phase 3: lateral spread (WATER — fluid behavior) ---
-	logic [CELL_BITS-1:0] w00, w01, w10, w11;
-	logic wl_top, wr_top, wl_bot, wr_bot;
-
-	always_comb begin
-		w00 = d00; w01 = d01; w10 = d10; w11 = d11;
-
-		// Top row: WATER spreads sideways when blocked below
-		wl_top = (d00 == MAT_WATER) && (d10 != MAT_EMPTY) && (d01 == MAT_EMPTY);
-		wr_top = (d01 == MAT_WATER) && (d11 != MAT_EMPTY) && (d00 == MAT_EMPTY);
-
-		if (wl_top && wr_top) begin
-			if (rnd) begin
-				w00 = d01; w01 = d00;
-			end
-			// else: neither moves (symmetric deadlock without rnd)
-		end else if (wl_top) begin
-			w00 = d01; w01 = d00;
-		end else if (wr_top) begin
-			w01 = d00; w00 = d01;
-		end
-
-		// Bottom row: WATER spreads sideways (unconditionally — it's at the bottom)
-		wl_bot = (w10 == MAT_WATER) && (w11 == MAT_EMPTY);
-		wr_bot = (w11 == MAT_WATER) && (w10 == MAT_EMPTY);
-
-		if (wl_bot && wr_bot) begin
-			// Both WATER — symmetric; rnd picks (but both are WATER+EMPTY,
-			// so a swap is the same either way — handled by wl_bot case)
-			if (rnd) begin
-				w10 = MAT_EMPTY; w11 = MAT_WATER;
-			end
-		end else if (wl_bot) begin
-			// WATER left, EMPTY right → swap
-			w10 = MAT_EMPTY; w11 = MAT_WATER;
-		end else if (wr_bot) begin
-			// EMPTY left, WATER right → swap
-			w10 = MAT_WATER; w11 = MAT_EMPTY;
-		end
-	end
-
-	// --- Rotate result back from canonical DOWN to original orientation ---
+	// Rotate result back to the original orientation.
 	always_comb begin
 		case (grav_dir)
-			2'd0: begin n00 = w00; n01 = w01; n10 = w10; n11 = w11; end
-			2'd1: begin n00 = w11; n01 = w10; n10 = w01; n11 = w00; end
-			2'd2: begin n00 = w01; n01 = w11; n10 = w00; n11 = w10; end
-			2'd3: begin n00 = w10; n01 = w00; n10 = w11; n11 = w01; end
-			default: begin n00 = w00; n01 = w01; n10 = w10; n11 = w11; end
+			2'd0: begin n00 = s_a; n01 = s_b; n10 = s_c; n11 = s_d; end  // DOWN
+			2'd1: begin n00 = s_d; n01 = s_c; n10 = s_b; n11 = s_a; end  // UP
+			2'd2: begin n00 = s_b; n01 = s_d; n10 = s_a; n11 = s_c; end  // LEFT
+			2'd3: begin n00 = s_c; n01 = s_a; n10 = s_d; n11 = s_b; end  // RIGHT
+			default: begin n00 = s_a; n01 = s_b; n10 = s_c; n11 = s_d; end
 		endcase
 	end
 

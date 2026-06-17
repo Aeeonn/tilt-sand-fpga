@@ -15,15 +15,15 @@ WALL  = 1
 SAND  = 2
 WATER = 3
 
-# Density: higher = heavier (sinks). WALL = special (immovable).
-# EMPTY=0, WATER=1, everything else (SAND + materials 4-15)=2.
+# Density: higher = heavier (sinks). WALL is max so nothing can displace it
+# via the vertical-fall swap. EMPTY=0, WATER=1, SAND/others=2, WALL=3.
 def _density(mat):
     if mat == EMPTY:
         return 0
     if mat == WATER:
         return 1
     if mat == WALL:
-        return 0  # unused — wall checked separately
+        return 3  # immovable: nothing is denser
     return 2  # granular solid
 
 # Gravity directions
@@ -43,6 +43,11 @@ def _is_movable(mat):
     return mat != EMPTY and mat != WALL
 
 
+def _is_granular(mat):
+    """Granular solid — slides diagonally but does not spread like a fluid."""
+    return mat != EMPTY and mat != WALL and mat != WATER
+
+
 def _falls_into(src, dst):
     """src displaces dst vertically if src is heavier and dst is lighter.
     WALL never moves. EMPTY never falls."""
@@ -56,75 +61,53 @@ def _falls_into(src, dst):
 def _rule_down(c00, c01, c10, c11, rnd):
     """Apply the block rule with gravity = DOWN (canonical orientation).
 
-    Phase 1: vertical fall (each column independently).
-             - SAND falls into EMPTY or WATER
-             - WATER falls into EMPTY
-    Phase 2: diagonal flow (any mobile material: sand slides, water flows).
-    Phase 3: lateral spread (fluid: WATER spreads sideways).
+    Working cells a=TL b=TR c=BL d=BR. Four sequential phases:
+      1. Vertical fall  — heavier cell sinks below a lighter one (density).
+      2. Water diagonal — top fluid blocked straight down drains to an empty
+                          diagonal (water flows around obstacles).
+      3. Water level    — fluid spreads horizontally into adjacent EMPTY,
+                          rnd-biased so it converges flat instead of sloshing.
+      4. Sand diagonal  — granular cell blocked by a solid below slides into
+                          an empty diagonal, PROBABILISTIC (rnd) for a steeper
+                          angle of repose (real pyramids).
 
+    Each phase is a swap (or no-op) → a pure permutation (conserves mass).
     Returns (n00, n01, n10, n11).
     """
-    r00, r01, r10, r11 = c00, c01, c10, c11
+    a, b, c, d = c00, c01, c10, c11
 
-    # Phase 1: vertical fall — left column
-    if _falls_into(r00, r10):
-        r00, r10 = r10, r00
+    # Phase 1: vertical fall (each column independently, by density)
+    if _is_movable(a) and _density(a) > _density(c):
+        a, c = c, a
+    if _is_movable(b) and _density(b) > _density(d):
+        b, d = d, b
 
-    # Phase 1: vertical fall — right column
-    if _falls_into(r01, r11):
-        r01, r11 = r11, r01
+    # Phase 2: water diagonal flow — top fluid blocked straight down drains
+    # into an empty diagonal (lets water flow around obstacles).
+    if a == WATER and c != EMPTY and d == EMPTY:
+        a, d = d, a
+    elif b == WATER and d != EMPTY and c == EMPTY:
+        b, c = c, b
 
-    # Phase 2: diagonal flow — any mobile material (sand slides, water flows)
-    # After phase 1, a mobile cell still in row 0 is blocked straight down,
-    # so it flows into an EMPTY diagonal cell. Sand piles; water drains.
-    left_can  = (_is_movable(r00) and r10 != EMPTY and r11 == EMPTY)
-    right_can = (_is_movable(r01) and r11 != EMPTY and r10 == EMPTY)
+    # Phase 3: water horizontal level — spread into adjacent EMPTY in each
+    # row, rnd-biased so net flow alternates and converges to a flat surface.
+    if a == WATER and b == EMPTY and rnd:
+        a, b = b, a
+    elif b == WATER and a == EMPTY and not rnd:
+        a, b = b, a
+    if c == WATER and d == EMPTY and rnd:
+        c, d = d, c
+    elif d == WATER and c == EMPTY and not rnd:
+        c, d = d, c
 
-    if left_can and right_can:
-        if rnd:
-            r00, r11 = r11, r00
-        else:
-            r01, r10 = r10, r01
-    elif left_can:
-        r00, r11 = r11, r00
-    elif right_can:
-        r01, r10 = r10, r01
+    # Phase 4: granular diagonal slide — blocked by a solid below, slides
+    # into an empty diagonal. PROBABILISTIC (rnd) → steeper angle of repose.
+    if _is_granular(a) and c != EMPTY and c != WATER and d == EMPTY and rnd:
+        a, d = d, a
+    elif _is_granular(b) and d != EMPTY and d != WATER and c == EMPTY and not rnd:
+        b, c = c, b
 
-    # Phase 3: lateral spread — WATER flows sideways when blocked below
-    # WATER in row 0 spreads to an adjacent EMPTY in the same row
-    # WATER in row 1 spreads to an adjacent EMPTY in the same row
-    # (only if blocked below — i.e., the cell below in the block is not EMPTY)
-    # For row 0: water at (0,0) can spread to (0,1) if (0,1) is EMPTY and (1,0) blocks
-    #            water at (0,1) can spread to (0,0) if (0,0) is EMPTY and (1,1) blocks
-    w_left  = (r00 == WATER and r10 != EMPTY and r01 == EMPTY)
-    w_right = (r01 == WATER and r11 != EMPTY and r00 == EMPTY)
-
-    if w_left and w_right:
-        # Both want to spread — rnd picks one
-        if rnd:
-            r00, r01 = r01, r00
-        else:
-            r01, r00 = r00, r01  # same effect since both swap
-    elif w_left:
-        r00, r01 = r01, r00
-    elif w_right:
-        r01, r00 = r00, r01
-
-    # Lateral spread for row 1 (bottom row)
-    w_left_b  = (r10 == WATER and r11 == EMPTY)
-    w_right_b = (r11 == WATER and r10 == EMPTY)
-
-    if w_left_b and w_right_b:
-        if rnd:
-            r10, r11 = r11, r10
-        else:
-            pass  # only one moves
-    elif w_left_b:
-        r10, r11 = r11, r10
-    elif w_right_b:
-        r11, r10 = r10, r11
-
-    return r00, r01, r10, r11
+    return a, b, c, d
 
 
 def _rotate_cw(c00, c01, c10, c11):

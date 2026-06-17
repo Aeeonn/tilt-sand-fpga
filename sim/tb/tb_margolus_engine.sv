@@ -16,7 +16,7 @@ module tb_margolus_engine;
 	localparam int CELL_BITS = 4;
 	localparam int DEPTH = GW * GH;   // 64
 	localparam int AW = $clog2(DEPTH); // 6
-	localparam int NUM_FRAMES = 10;
+	localparam int NUM_FRAMES = 24;
 
 	logic clk = 0, rst_n;
 	logic start;
@@ -172,18 +172,21 @@ module tb_margolus_engine;
 		// Check busy is low after all frames
 		check("not busy after frames", busy == 1'b0);
 
-		// Verify sand has fallen: in the final state, the bottom interior
-		// rows should have sand (it started at rows 2-4, should pile at row 6)
+		// Verify sand has fallen: after settling, the bottom interior rows
+		// (5 and 6, just above the bottom wall) should hold sand. The exact
+		// pile shape depends on the probabilistic slide, so check the region.
 		begin
 			int sand_in_bottom;
 			sand_in_bottom = 0;
-			for (int x = 1; x < GW-1; x++) begin
-				int addr;
-				addr = 6 * GW + x;  // row 6 (just above bottom wall)
-				if (front_sel == 1'b0) begin
-					if (bank0[addr] == SAND) sand_in_bottom++;
-				end else begin
-					if (bank1[addr] == SAND) sand_in_bottom++;
+			for (int y = 5; y <= 6; y++) begin
+				for (int x = 1; x < GW-1; x++) begin
+					int addr;
+					addr = y * GW + x;
+					if (front_sel == 1'b0) begin
+						if (bank0[addr] == SAND) sand_in_bottom++;
+					end else begin
+						if (bank1[addr] == SAND) sand_in_bottom++;
+					end
 				end
 			end
 			check("sand reached bottom rows", sand_in_bottom > 0);

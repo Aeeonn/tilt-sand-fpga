@@ -49,8 +49,8 @@ gives 159×119 = 18,921 interior blocks (edge blocks held).
 ## FSM
 
 ```
-S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_RESULT → S_WRITE0..3 → S_NEXT
-                      ↑_____________________________________________________________|
+S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_STAGE1 → S_STAGE2 → S_WRITE0..3 → S_NEXT
+                      ↑___________________________________________________________________________|
 ```
 
 ### States
@@ -60,8 +60,9 @@ S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_RESULT → S_WRIT
 | S_IDLE | Wait for `start`. Phase counter is already set for this frame. |
 | S_ADDR | Register the 4 cell addresses (breaks the multiply timing path). |
 | S_READ0..3 | Issue 4 read addresses for the current 2×2 block, one per cycle. Each read has 1-cycle BRAM latency, so we pipeline: issue addr in READn, capture data in READn+1. |
-| S_APPLY | All 4 cells captured; `block_rule` output is combinationally valid. Advance the LFSR. |
-| S_RESULT | Register block_rule outputs (breaks the 3-phase combinational depth for timing). |
+| S_APPLY | All 4 cells captured; rotate to canonical DOWN. Advance the LFSR. |
+| S_STAGE1 | Register `block_rule_fall` output (phases 1–2) + the rnd bit — first half of the split rule. |
+| S_STAGE2 | Register `block_rule_settle` output (phases 3–4), rotated back — final block result. |
 | S_WRITE0..3 | Write the 4 result cells back (4 cycles, one write per cycle to the back bank). |
 | S_NEXT | Advance to the next block. If more blocks remain, go to S_ADDR. If all done, pulse `frame_done`, toggle phase, return to S_IDLE. |
 
@@ -92,7 +93,7 @@ Row-major by block row, then block column. For phase 0:
 
 ### Cycle budget
 
-Per block: 1 addr + 4 read + 1 apply + 1 result + 4 write + 1 next = 12 cycles.
+Per block: 1 addr + 4 read + 1 apply + 2 stage + 4 write + 1 next = 13 cycles.
 Phase 0: 19,200 blocks × 12 = 230,400 cycles @ 100 MHz = 2.3 ms.
 Phase 1: 18,921 blocks × 10 = 189,210 cycles @ 100 MHz = 1.89 ms.
 Total per frame: ~3.8 ms ≪ 16.67 ms (60 Hz) — vast headroom.

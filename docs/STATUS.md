@@ -237,3 +237,30 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
 - **Compile**: 0 errors. Fitter: 1,720 LEs (3%), 681 regs, 614,784 M9K bits, 0
   DSP, 1/4 PLLs. STA closed: Fmax clk_100 103.0 MHz, clk_25 68.4 MHz (need 25),
   worst slack +0.294 ns. 19/19 unit TBs + tb_top pass.
+
+## Physics rework — V3 rules (2026-06-17)
+
+Hardware testing revealed two behavioural problems the earlier rules couldn't
+fix: water formed a centred hump instead of leveling (it oscillated forever
+between Margolus phases), and sand spread too flat instead of forming pyramids.
+Prototyped fixes in Python (ASCII frame dumps) before porting to RTL.
+
+- **block_rule V3** — four phases, each a swap so conservation stays structural:
+  1. *Vertical fall* by density. WALL density raised to max (3) — fixes a latent
+     bug where SAND (density 2 > WALL's old 0) could swap *through* a wall
+     (walls appeared mid-grid and sand sank into the floor; conservation hid it).
+  2. *Water diagonal flow* — fluid drains around obstacles.
+  3. *Water horizontal level* — rnd-biased per row so net flow converges to a
+     flat surface instead of sloshing (fixes the "hump / mixing").
+  4. *Granular diagonal slide* — now **probabilistic** (rnd-gated) → steeper
+     angle of repose, real pyramids instead of flat spread.
+- **Pipeline split for timing**: the 4-phase chain busted the 100 MHz path
+  (-0.865 ns). Split into `block_rule_fall` (phases 1–2) + `block_rule_settle`
+  (phases 3–4); `margolus_engine` registers a midpoint between them (S_STAGE1 /
+  S_STAGE2), evaluating the rule across two cycles. `block_rule` is now a thin
+  combinational wrapper chaining both stages (still the tb_block_rule reference).
+- **Verification**: exhaustive `tb_block_rule` 2048/2048 (RTL wrapper == golden),
+  `tb_margolus_engine` 28/28 (incl. multi-frame mass conservation, walls stay
+  put, pyramids form), full regression 19/19.
+- **Compile**: 0 errors. Fitter: 1,744 LEs (4%), 715 regs. STA closed: Fmax
+  clk_100 103.8 MHz, clk_25 69.9 MHz, worst slack +0.363 ns.

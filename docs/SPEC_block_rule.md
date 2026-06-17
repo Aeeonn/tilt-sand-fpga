@@ -49,48 +49,62 @@ canonical DOWN orientation, apply the DOWN rule, then rotate the result back.
 | ID | Name | Density | Behavior |
 |----|------|---------|----------|
 | 0 | EMPTY | 0 | Vacuum; anything falls into it |
-| 1 | WALL | — | Immovable; never participates in swaps |
-| 2 | SAND | 2 | Granular: falls, flows diagonally, sinks through water |
-| 3 | WATER | 1 | Fluid: falls, flows diagonally, spreads laterally |
+| 1 | WALL | 3 (max) | Immovable; nothing can displace it |
+| 2 | SAND | 2 | Granular: falls, sinks through water, slides diagonally to pile |
+| 3 | WATER | 1 | Fluid: falls, flows diagonally, levels horizontally |
 | 4–15 | (various) | 2 | Granular solids — same physics as SAND |
 
 ## Rules (gravity = DOWN, canonical orientation)
 
 All rules are **permutations** of the input multiset — no creation or destruction.
+The four phases run sequentially on the canonical-DOWN block (a=TL b=TR c=BL d=BR).
 
 ### Phase 1: Vertical fall
 
-A heavier cell in row 0 displaces a lighter cell directly below (same column,
-row 1). Density ordering: EMPTY(0) < WATER(1) < SAND/others(2). WALL is immovable.
+A heavier cell sinks below a lighter one in the same column. Density ordering:
+EMPTY(0) < WATER(1) < SAND/others(2) < WALL(3). WALL has max density so nothing
+displaces it via the swap (this is what keeps walls immovable).
 
 - SAND (and materials 4–15) fall into EMPTY or WATER.
 - WATER falls into EMPTY.
-- Both columns are evaluated independently.
+- Both columns evaluated independently.
 
-### Phase 2: Diagonal flow (any mobile cell)
+### Phase 2: Water diagonal flow
 
-If a mobile cell (not EMPTY, not WALL) is still in row 0 after phase 1, it is
-blocked straight down (the cell below is not EMPTY — otherwise it would have
-fallen). It flows into the diagonal cell in row 1 (opposite column) if that
-cell is EMPTY.
+A top-row WATER cell blocked straight down (cell below not EMPTY) drains into an
+EMPTY diagonal cell. This lets water flow around obstacles instead of getting
+stuck on ledges.
 
-This makes granular materials pile at an angle of repose, and crucially lets
-WATER drain around obstacles instead of getting stuck on sand ledges. If both
-diagonals are open, `rnd` picks left vs right.
+### Phase 3: Water horizontal level
 
-### Phase 3: Lateral spread (fluid — WATER only)
+WATER spreads into an adjacent EMPTY cell in the same row, **rnd-biased per row**
+(left-flow when rnd=1, right-flow when rnd=0). The directional bias makes net
+flow alternate and converge to a flat surface instead of sloshing forever — this
+is what fixed the "water hump / mixing" behaviour.
 
-WATER in row 0 spreads sideways to an adjacent EMPTY cell in the same row when
-blocked below. WATER in row 1 spreads sideways unconditionally. `rnd` breaks
-symmetric ties. This gives water a flat surface (sand piles, water levels out).
+### Phase 4: Granular diagonal slide
+
+A granular cell (SAND or 4–15) blocked by a solid below (not EMPTY, not WATER)
+slides into an EMPTY diagonal — **probabilistic** (gated by rnd). Making the slide
+probabilistic rather than greedy steepens the angle of repose so piles form proper
+pyramids instead of spreading flat.
 
 ### Walls
 
-WALL cells never move. No swap involves a WALL as source or destination.
+WALL never moves (max density, and the granular/fluid rules exclude it as a source).
 
-### Identity
+## Pipeline split (for timing)
 
-If no rule applies, output = input (block is unchanged).
+The four phases are a deep combinational chain. They are split into two
+sub-modules so `margolus_engine` can register a midpoint and evaluate them across
+two clock cycles (closes timing at 100 MHz):
+
+- `block_rule_fall`   — phases 1–2 (fall + water diagonal), no `rnd`.
+- `block_rule_settle` — phases 3–4 (water level + sand diagonal), uses `rnd`.
+
+`block_rule` itself is a thin combinational wrapper that rotates to canonical
+DOWN, chains both stages, and rotates back — the reference for `tb_block_rule`
+and the match target for `sim/golden/block_rule.py`.
 
 ## Conservation property (critical invariant)
 
@@ -103,5 +117,5 @@ this exhaustively, and `margolus_engine` preserves it structurally.
 - `tb_block_rule`: exhaustive test of all 4^4 = 256 material combinations ×
   4 gravity dirs × 2 rnd values = **2048** cases. Each case checks conservation
   (multiset equality) and correctness vs the Python golden.
-- Python golden: `sim/golden/block_rule.py` implements the same three-phase
-  logic; the TB compares RTL output against it for every case.
+- Python golden: `sim/golden/block_rule.py` implements the same four-phase logic
+  in one function; the TB compares RTL (wrapper of both stages) against it.

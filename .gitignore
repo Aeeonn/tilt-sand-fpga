@@ -53,3 +53,4 @@ sim/golden/mass_counts.txt
 
 # Simulation output artifacts
 sim/out/
+*.cdf

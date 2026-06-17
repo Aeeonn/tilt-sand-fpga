@@ -54,8 +54,9 @@ module margolus_engine #(
 		S_READ1,   // issue addr for c01, capture c00
 		S_READ2,   // issue addr for c10, capture c01
 		S_READ3,   // issue addr for c11, capture c10
-		S_APPLY,   // capture c11, block_rule is combinational
-		S_RESULT,  // register block_rule output (breaks combinational depth)
+		S_APPLY,   // capture c11; advance LFSR
+		S_STAGE1,  // block_rule_fall combinational → register midpoint
+		S_STAGE2,  // block_rule_settle combinational → register result
 		S_WRITE0,  // write n00
 		S_WRITE1,  // write n01
 		S_WRITE2,  // write n10
@@ -118,22 +119,54 @@ module margolus_engine #(
 	);
 
 	// -----------------------------------------------------------------
-	// block_rule instance (combinational)
+	// block_rule split into two pipelined stages (registered midpoint) so
+	// the 4-phase combinational rule fits the clk_100 period. Stage 1
+	// (fall + water diagonal) has no rnd; stage 2 (water level + sand
+	// diagonal) uses the registered rnd bit.
 	// -----------------------------------------------------------------
-	logic [CELL_BITS-1:0] n00, n01, n10, n11;
+	logic [CELL_BITS-1:0] n00, n01, n10, n11;   // final rotated-back result (comb)
 
-	block_rule #(.CELL_BITS(CELL_BITS)) u_rule (
-		.grav_dir(grav_dir),
-		.rnd     (lfsr_rnd[0]),
-		.c00     (c00_q),
-		.c01     (c01_q),
-		.c10     (c10_q),
-		.c11     (c11_q),
-		.n00     (n00),
-		.n01     (n01),
-		.n10     (n10),
-		.n11     (n11)
+	// Rotate captured cells to canonical-DOWN (a=TL b=TR c=BL d=BR).
+	logic [CELL_BITS-1:0] rot_a, rot_b, rot_c, rot_d;
+	always_comb begin
+		case (grav_dir)
+			2'd0: begin rot_a = c00_q; rot_b = c01_q; rot_c = c10_q; rot_d = c11_q; end
+			2'd1: begin rot_a = c11_q; rot_b = c10_q; rot_c = c01_q; rot_d = c00_q; end
+			2'd2: begin rot_a = c10_q; rot_b = c00_q; rot_c = c11_q; rot_d = c01_q; end
+			2'd3: begin rot_a = c01_q; rot_b = c11_q; rot_c = c00_q; rot_d = c10_q; end
+			default: begin rot_a = c00_q; rot_b = c01_q; rot_c = c10_q; rot_d = c11_q; end
+		endcase
+	end
+
+	// Stage 1: fall + water diagonal (combinational), registered in S_STAGE1.
+	logic [CELL_BITS-1:0] f_a, f_b, f_c, f_d;
+	block_rule_fall #(.CELL_BITS(CELL_BITS)) u_fall (
+		.a_i(rot_a), .b_i(rot_b), .c_i(rot_c), .d_i(rot_d),
+		.a_o(f_a),   .b_o(f_b),   .c_o(f_c),   .d_o(f_d)
 	);
+
+	// Registered midpoint (canonical orientation) + rnd for stage 2.
+	logic [CELL_BITS-1:0] mid_a_q, mid_b_q, mid_c_q, mid_d_q;
+	logic                 rnd_q;
+
+	// Stage 2: water level + sand diagonal (combinational), from the midpoint.
+	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
+	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
+		.rnd(rnd_q),
+		.a_i(mid_a_q), .b_i(mid_b_q), .c_i(mid_c_q), .d_i(mid_d_q),
+		.a_o(s_a),     .b_o(s_b),     .c_o(s_c),     .d_o(s_d)
+	);
+
+	// Rotate stage-2 output back to the original orientation (combinational).
+	always_comb begin
+		case (grav_dir)
+			2'd0: begin n00 = s_a; n01 = s_b; n10 = s_c; n11 = s_d; end
+			2'd1: begin n00 = s_d; n01 = s_c; n10 = s_b; n11 = s_a; end
+			2'd2: begin n00 = s_b; n01 = s_d; n10 = s_a; n11 = s_c; end
+			2'd3: begin n00 = s_c; n01 = s_a; n10 = s_d; n11 = s_b; end
+			default: begin n00 = s_a; n01 = s_b; n10 = s_c; n11 = s_d; end
+		endcase
+	end
 
 	// -----------------------------------------------------------------
 	// Block limit for current phase
@@ -188,13 +221,18 @@ module margolus_engine #(
 			end
 
 			S_APPLY: begin
-				// c11 captured this cycle; block_rule output (n*) valid
-				lfsr_en = 1'b1;   // advance LFSR for next block
-				state_d = S_RESULT;
+				// c11 captured at this edge; advance LFSR for the next block.
+				lfsr_en = 1'b1;
+				state_d = S_STAGE1;
 			end
 
-			S_RESULT: begin
-				// block_rule outputs registered on this edge (see sequential block)
+			S_STAGE1: begin
+				// stage-1 (fall + water diagonal) registered into the midpoint
+				state_d = S_STAGE2;
+			end
+
+			S_STAGE2: begin
+				// stage-2 (water level + sand diagonal) registered into n*_q
 				state_d = S_WRITE0;
 			end
 
@@ -253,6 +291,11 @@ module margolus_engine #(
 			c01_q       <= '0;
 			c10_q       <= '0;
 			c11_q       <= '0;
+			mid_a_q     <= '0;
+			mid_b_q     <= '0;
+			mid_c_q     <= '0;
+			mid_d_q     <= '0;
+			rnd_q       <= 1'b0;
 			n00_q       <= '0;
 			n01_q       <= '0;
 			n10_q       <= '0;
@@ -292,8 +335,19 @@ module margolus_engine #(
 				default: ;
 			endcase
 
-			// Register block_rule outputs in S_RESULT (c11_q is now valid)
-			if (state == S_RESULT) begin
+			// Register block_rule outputs across two pipeline stages.
+			// S_STAGE1: c11_q is valid → register stage-1 (fall) midpoint and
+			//           the rnd bit for stage-2 (lfsr is stable here — it only
+			//           advances on lfsr_en in S_APPLY).
+			if (state == S_STAGE1) begin
+				mid_a_q <= f_a;
+				mid_b_q <= f_b;
+				mid_c_q <= f_c;
+				mid_d_q <= f_d;
+				rnd_q   <= lfsr_rnd[0];
+			end
+			// S_STAGE2: register the rotated-back stage-2 (settle) result.
+			if (state == S_STAGE2) begin
 				n00_q <= n00;
 				n01_q <= n01;
 				n10_q <= n10;
