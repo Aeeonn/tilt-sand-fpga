@@ -1,11 +1,13 @@
 // =====================================================================
-// sand_falling :: top  — M4 Interaction (brush + particle count + HEX)
+// sand_falling :: top  — M6 Tilt (ADXL345 accelerometer → gravity)
 // =====================================================================
 // TILT-SAND falling-sand toy on the DE10-Lite.
 //
 //   pll_sys -> clk_100 (CA engine domain) + clk_25 (VGA pixel)
 //   reset_sync x2 (KEY[0] = async reset)
 //   vga_timing 640x480@60  (2x2 pixel-doubled view of the 320x240 grid)
+//   adxl345_spi   reads accelerometer via SPI (~100 Hz)
+//   gravity_ctrl  tilt vector → 2-bit gravity direction (dead-zone hysteresis)
 //   margolus_engine  scans grid in 2x2 blocks, applies block_rule
 //   brush            injects material (KEY[1]) or clears grid (SW[9])
 //   particle_count   counts non-EMPTY cells for HEX display
@@ -15,8 +17,8 @@
 //   hex_driver x6    particle count on HEX3:0, material on HEX5:4
 //   uart_rx/uart_monitor/uart_tx peek/poke debug channel
 //
-// M4: interactive sandbox — KEY[1] spawns material (SW[5:2] selects),
-// SW[9] clears, SW[1:0] sets gravity direction, HEX shows particle count.
+// M6: board tilt steers gravity via the on-board ADXL345 accelerometer.
+// SW[8] overrides to manual (SW[1:0]) when high.
 // =====================================================================
 module top #(
 		parameter int FB_WIDTH  = 320,
@@ -43,7 +45,14 @@ module top #(
 		output logic [7:0] HEX4,
 		output logic [7:0] HEX5,
 
-		output logic [9:0] LEDR
+		output logic [9:0] LEDR,
+
+		// GSENSOR (ADXL345 accelerometer, SPI)
+		output logic       GSENSOR_CS_N,
+		output logic       GSENSOR_SCLK,
+		output logic       GSENSOR_SDI,
+		input  logic       GSENSOR_SDO,
+		input  logic [2:1] GSENSOR_INT
 );
 
 	// -----------------------------------------------------------------
@@ -57,7 +66,7 @@ module top #(
 		.inclk0       (MAX10_CLK1_50),
 		.arst         (~KEY[0]),
 		.clk_100      (clk_100),
-		.clk_100_shift(clk_100_shift),   // unused (SDRAM removed); left for PLL clk[] indices
+		.clk_100_shift(clk_100_shift),   // unused; PLL c1 retained to keep clk[] index stable
 		.clk_25       (clk_25),
 		.locked       (locked)
 	);
@@ -89,13 +98,11 @@ module top #(
 	);
 
 	// -----------------------------------------------------------------
-	// M3 grid -> framebuffer path:
-	//   grid_scanout : pixel -> cell address           (+1 cyc: BRAM read)
-	//   grid_mem     : double-buffered cell store; bank0 = preloaded grid
-	//   margolus_engine : reads front, writes back, signals frame_done
-	//   palette      : cell -> RGB444                   (+1 cyc: palette read)
-	// Sync is delayed to match (scanout +1, top +1), so the emitted stream
-	// is self-consistent and pixel-exact.
+	// Grid → VGA pipeline:
+	//   grid_scanout : pixel → cell address            (+1 cyc: BRAM read)
+	//   grid_mem     : double-buffered cell store (dual-clock BRAM)
+	//   palette      : cell → RGB444                   (+1 cyc: palette read)
+	// Sync signals are delayed to match the 2-cycle datapath latency.
 	// -----------------------------------------------------------------
 	localparam int ADDR_BITS = $clog2(FB_WIDTH * FB_HEIGHT);
 
@@ -131,20 +138,58 @@ module top #(
 	);
 
 	// -----------------------------------------------------------------
-	// M4: Interaction — brush + engine + particle_count sequencer
+	// M6: ADXL345 accelerometer → gravity direction
 	// -----------------------------------------------------------------
-	// Sequencing per frame:
-	//   swapped → brush (inject/clear if requested) → brush.done
-	//   → particle_count (scan front buffer) → pc.done → engine starts
+	logic signed [9:0] accel_x, accel_y;
+	logic              accel_valid;
+	logic [1:0]        grav_dir;
+
+	adxl345_spi #(
+		.CLK_DIV  (25),       // ~2 MHz SPI clock
+		.POLL_DIV (1000000)   // ~100 Hz polling rate
+	) u_accel (
+		.clk       (clk_100),
+		.rst_n     (rst_n_100),
+		.spi_cs_n  (GSENSOR_CS_N),
+		.spi_sclk  (GSENSOR_SCLK),
+		.spi_mosi  (GSENSOR_SDI),
+		.spi_miso  (GSENSOR_SDO),
+		.accel_x   (accel_x),
+		.accel_y   (accel_y),
+		.data_valid(accel_valid)
+	);
+
+	// SW[8] = override: when high, use SW[1:0] instead of accelerometer
+	gravity_ctrl #(
+		.THRESHOLD(50)
+	) u_grav_ctrl (
+		.clk        (clk_100),
+		.rst_n      (rst_n_100),
+		.accel_x    (accel_x),
+		.accel_y    (accel_y),
+		.data_valid (accel_valid),
+		.sw_override(SW[8]),
+		.sw_dir     (SW[1:0]),
+		.grav_dir   (grav_dir)
+	);
+
+	// -----------------------------------------------------------------
+	// Frame sequencer — orchestrates per-frame operations on port A.
+	// -----------------------------------------------------------------
+	// Correct ordering:
+	//   swapped → particle_count (count front) → engine (read front,
+	//   write back) → brush (write back, AFTER engine so writes persist)
+	//   → frame_done to grid_mem (triggers CDC swap)
+	//
+	// The brush writes AFTER the engine to avoid being overwritten (the
+	// engine writes every cell in the back buffer during its scan).
+	// frame_done is gated: grid_mem only sees it after the brush finishes.
 	// -----------------------------------------------------------------
 	logic [ADDR_BITS-1:0]  eng_rd_addr, eng_wr_addr;
 	logic [CELL_BITS-1:0]  eng_rd_data, eng_wr_data;
 	logic                  eng_wr_en, eng_frame_done, eng_busy;
 	logic                  grid_swapped;
-	logic [1:0]            grav_dir;
-
-	// Gravity direction from SW[1:0]
-	assign grav_dir = SW[1:0];
+	logic                  grid_frame_done;   // gated: after brush post-engine
 
 	// --- Debounce KEY[1] for brush trigger ---
 	logic key1_db;
@@ -202,17 +247,18 @@ module top #(
 		.done   (pc_done)
 	);
 
-	// --- Frame sequencer ---
-	// State: after swapped, run brush -> then particle_count -> then engine
+	// --- Frame sequencer FSM ---
 	typedef enum logic [2:0] {
 		SEQ_WAIT_SWAP,
-		SEQ_BRUSH,
 		SEQ_COUNT,
-		SEQ_ENGINE
+		SEQ_ENGINE,
+		SEQ_BRUSH,
+		SEQ_DONE
 	} seq_state_e;
 
 	seq_state_e seq_state;
 	logic       engine_start;
+	logic       kickstart_pulse;  // declared early; assigned below
 
 	always_ff @(posedge clk_100 or negedge rst_n_100) begin
 		if (!rst_n_100) begin
@@ -220,11 +266,7 @@ module top #(
 		end else begin
 			case (seq_state)
 				SEQ_WAIT_SWAP: begin
-					if (grid_swapped)
-						seq_state <= SEQ_BRUSH;
-				end
-				SEQ_BRUSH: begin
-					if (brush_done)
+					if (grid_swapped || kickstart_pulse)
 						seq_state <= SEQ_COUNT;
 				end
 				SEQ_COUNT: begin
@@ -232,27 +274,44 @@ module top #(
 						seq_state <= SEQ_ENGINE;
 				end
 				SEQ_ENGINE: begin
-					// Engine will start; wait for it to finish + swap
 					if (eng_frame_done)
-						seq_state <= SEQ_WAIT_SWAP;
+						seq_state <= SEQ_BRUSH;
+				end
+				SEQ_BRUSH: begin
+					if (brush_done)
+						seq_state <= SEQ_DONE;
+				end
+				SEQ_DONE: begin
+					// frame_done fires this cycle (see grid_frame_done)
+					seq_state <= SEQ_WAIT_SWAP;
 				end
 				default: seq_state <= SEQ_WAIT_SWAP;
 			endcase
 		end
 	end
 
-	// First-frame kickstart (before any swap has occurred)
+	// First-frame kickstart: on the very first cycle after reset when
+	// nothing is busy, enter the sequencer at SEQ_COUNT (skip waiting
+	// for a swap that hasn't happened yet). This ensures proper ordering.
 	logic first_start_q;
 	always_ff @(posedge clk_100 or negedge rst_n_100) begin
 		if (!rst_n_100)
 			first_start_q <= 1'b0;
-		else if (!first_start_q && !eng_busy && !brush_busy && !pc_busy)
+		else if (!first_start_q && !eng_busy && !brush_busy && !pc_busy) begin
 			first_start_q <= 1'b1;
+		end
 	end
 
-	assign engine_start = (seq_state == SEQ_ENGINE && !eng_busy) |
-	                       (~first_start_q & ~eng_busy & ~brush_busy & ~pc_busy);
-	assign pc_start     = (seq_state == SEQ_BRUSH && brush_done);
+	// Inject the first-frame start into the sequencer by overriding
+	// seq_state to SEQ_COUNT on the kickstart edge.
+	assign kickstart_pulse = ~first_start_q & ~eng_busy & ~brush_busy & ~pc_busy;
+
+	assign engine_start = (seq_state == SEQ_COUNT && pc_done);
+	assign pc_start     = (seq_state == SEQ_WAIT_SWAP && grid_swapped) | kickstart_pulse;
+
+	// frame_done to grid_mem: fires only after the brush has finished
+	// post-engine, so injected material survives the buffer swap.
+	assign grid_frame_done = (seq_state == SEQ_DONE);
 
 	// --- Write port mux: brush has priority when busy ---
 	logic                 grid_wr_en;
@@ -316,7 +375,7 @@ module top #(
 		.wr_en     (grid_wr_en),
 		.wr_addr   (grid_wr_addr),
 		.wr_data   (grid_wr_data),
-		.frame_done(eng_frame_done),
+		.frame_done(grid_frame_done),   // gated: after brush post-engine
 		.swapped   (grid_swapped),
 		.front_a   (),
 		// scanout / pixel domain

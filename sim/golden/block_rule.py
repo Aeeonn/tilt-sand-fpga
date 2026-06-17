@@ -15,8 +15,16 @@ WALL  = 1
 SAND  = 2
 WATER = 3
 
-# Density: higher = heavier (sinks). WALL = infinity (never moves).
-DENSITY = {EMPTY: 0, WATER: 1, SAND: 2, WALL: 99}
+# Density: higher = heavier (sinks). WALL = special (immovable).
+# EMPTY=0, WATER=1, everything else (SAND + materials 4-15)=2.
+def _density(mat):
+    if mat == EMPTY:
+        return 0
+    if mat == WATER:
+        return 1
+    if mat == WALL:
+        return 0  # unused — wall checked separately
+    return 2  # granular solid
 
 # Gravity directions
 G_DOWN  = 0
@@ -26,8 +34,13 @@ G_RIGHT = 3
 
 
 def _is_mobile(mat):
-    """A material that can participate in swaps (not WALL)."""
+    """A material that is not WALL (used by _falls_into for src/dst checks)."""
     return mat != WALL
+
+
+def _is_movable(mat):
+    """A cell that can move on its own (everything except EMPTY and WALL)."""
+    return mat != EMPTY and mat != WALL
 
 
 def _falls_into(src, dst):
@@ -37,7 +50,7 @@ def _falls_into(src, dst):
         return False
     if src == EMPTY:
         return False
-    return DENSITY[src] > DENSITY[dst]
+    return _density(src) > _density(dst)
 
 
 def _rule_down(c00, c01, c10, c11, rnd):
@@ -46,7 +59,7 @@ def _rule_down(c00, c01, c10, c11, rnd):
     Phase 1: vertical fall (each column independently).
              - SAND falls into EMPTY or WATER
              - WATER falls into EMPTY
-    Phase 2: diagonal slide (granular: SAND only, not WATER).
+    Phase 2: diagonal flow (any mobile material: sand slides, water flows).
     Phase 3: lateral spread (fluid: WATER spreads sideways).
 
     Returns (n00, n01, n10, n11).
@@ -61,11 +74,11 @@ def _rule_down(c00, c01, c10, c11, rnd):
     if _falls_into(r01, r11):
         r01, r11 = r11, r01
 
-    # Phase 2: diagonal slide — SAND only (granular behavior)
-    # Left-top SAND slides to bottom-right if blocked below and diagonal is open
-    left_can  = (r00 == SAND and r10 != EMPTY and r10 != WATER and r11 == EMPTY)
-    # Right-top SAND slides to bottom-left
-    right_can = (r01 == SAND and r11 != EMPTY and r11 != WATER and r10 == EMPTY)
+    # Phase 2: diagonal flow — any mobile material (sand slides, water flows)
+    # After phase 1, a mobile cell still in row 0 is blocked straight down,
+    # so it flows into an EMPTY diagonal cell. Sand piles; water drains.
+    left_can  = (_is_movable(r00) and r10 != EMPTY and r11 == EMPTY)
+    right_can = (_is_movable(r01) and r11 != EMPTY and r10 == EMPTY)
 
     if left_can and right_can:
         if rnd:

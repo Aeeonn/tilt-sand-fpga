@@ -49,8 +49,8 @@ gives 159×119 = 18,921 interior blocks (edge blocks held).
 ## FSM
 
 ```
-S_IDLE → (start) → S_READ0 → S_READ1 → S_READ2 → S_READ3 → S_APPLY → S_WRITE → S_NEXT → S_DONE
-                        ↑__________________________________________________________|
+S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_RESULT → S_WRITE0..3 → S_NEXT
+                      ↑_____________________________________________________________|
 ```
 
 ### States
@@ -58,11 +58,12 @@ S_IDLE → (start) → S_READ0 → S_READ1 → S_READ2 → S_READ3 → S_APPLY �
 | State | Description |
 |-------|-------------|
 | S_IDLE | Wait for `start`. Phase counter is already set for this frame. |
+| S_ADDR | Register the 4 cell addresses (breaks the multiply timing path). |
 | S_READ0..3 | Issue 4 read addresses for the current 2×2 block, one per cycle. Each read has 1-cycle BRAM latency, so we pipeline: issue addr in READn, capture data in READn+1. |
-| S_APPLY | All 4 cells captured; `block_rule` output is ready (combinational). Advance the LFSR. |
-| S_WRITE | Write the 4 result cells back (4 cycles, one write per cycle to the back bank). |
-| S_NEXT | Advance to the next block. If more blocks remain, go to S_READ0. If done, go to S_DONE. |
-| S_DONE | Pulse `frame_done` for 1 cycle, toggle the internal phase, return to S_IDLE. |
+| S_APPLY | All 4 cells captured; `block_rule` output is combinationally valid. Advance the LFSR. |
+| S_RESULT | Register block_rule outputs (breaks the 3-phase combinational depth for timing). |
+| S_WRITE0..3 | Write the 4 result cells back (4 cycles, one write per cycle to the back bank). |
+| S_NEXT | Advance to the next block. If more blocks remain, go to S_ADDR. If all done, pulse `frame_done`, toggle phase, return to S_IDLE. |
 
 ### Read pipeline detail
 
@@ -91,8 +92,8 @@ Row-major by block row, then block column. For phase 0:
 
 ### Cycle budget
 
-Per block: 4 read + 1 apply + 4 write + 1 next = 10 cycles.
-Phase 0: 19,200 blocks × 10 = 192,000 cycles @ 100 MHz = 1.92 ms.
+Per block: 1 addr + 4 read + 1 apply + 1 result + 4 write + 1 next = 12 cycles.
+Phase 0: 19,200 blocks × 12 = 230,400 cycles @ 100 MHz = 2.3 ms.
 Phase 1: 18,921 blocks × 10 = 189,210 cycles @ 100 MHz = 1.89 ms.
 Total per frame: ~3.8 ms ≪ 16.67 ms (60 Hz) — vast headroom.
 

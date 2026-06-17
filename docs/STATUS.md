@@ -15,7 +15,7 @@ project directory.
 | **M3** — Margolus engine, sand only | `margolus_engine` + `block_rule` (EMPTY/WALL/SAND), gravity fixed DOWN, `lfsr` tie-break. Sand falls and piles. | Bit-exact vs Python stepper; **mass-conservation SVA** holds; piling visible on HW. | **DONE in sim + synthesis — 14/14 unit TBs + tb_top pixel-exact; compiles clean, STA closed; HW flash pending** |
 | **M4** — Interaction | `brush` injector + SW material select + KEY spawn + clear; 4-way gravity from SW; particle count on HEX. | Interactive sandbox on HW. | **DONE in sim + synthesis — 16/16 unit TBs; compiles clean, STA closed; HW flash pending** |
 | **M5** — Water | Add WATER: fluid lateral spread + sand/water density swap. | Two-material dynamics, mass-conserving, on HW. | **DONE in sim + synthesis — 16/16 TBs (block_rule 2048/2048); compiles clean, STA closed; HW flash pending** |
-| **M6** — Tilt (the headline) | `adxl345_spi` master + `gravity_ctrl` (tilt vector → gravity dir; 4-way → 8-way → probabilistic). | Board tilt visibly steers gravity on HW. | NOT STARTED |
+| **M6** — Tilt (the headline) | `adxl345_spi` master + `gravity_ctrl` (tilt vector → gravity dir; 4-way → 8-way → probabilistic). | Board tilt visibly steers gravity on HW. | **DONE in sim + synthesis — 18/18 TBs; compiles clean, STA closed; HW flash pending** |
 | **M7** — Reactive materials | FIRE/OIL/ACID/PLANT/… via `block_rule` reactions (golden tracks transmutation). | Rich sandbox; reactions verified vs golden. | NOT STARTED |
 | **Stretch** | Pressure/temperature fields; electricity (SPARK) + logic-gate materials (CA-ception); save dishes to UFM; bigger grid via SDRAM (restore from original); two-board vessel over GPIO. | — | — |
 
@@ -34,6 +34,7 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
 | M3 margolus_engine | 2026-06-16 | 997 | 614,592 | 0 | 101.3 MHz | 78.1 MHz | 15/15 TBs (14 unit + tb_top); mass conservation 14/14 | flash pending |
 | M4 interaction | 2026-06-16 | 1,341 | 614,592 | 0 | 100.7 MHz | 84.2 MHz | 16/16 TBs (brush 6/6, particle_count 5/5) | flash pending |
 | M5 water | 2026-06-16 | 1,404 | 614,592 | 0 | 105.7 MHz | 81.4 MHz | 16/16 TBs (block_rule 2048/2048 incl. WATER) | flash pending |
+| M6 tilt (ADXL345) | 2026-06-16 | 1,592 | 614,592 | 0 | 101.4 MHz | 82.0 MHz | 18/18 TBs (adxl345_spi 6/6, gravity_ctrl 10/10) | flash pending |
 
 ## M1 notes (2026-06-15)
 
@@ -185,3 +186,29 @@ One row per milestone after a `quartus_sh --flow compile` reaches fit + STA.
 - **LE growth**: +63 LEs from M4 (mostly the extra comparators for WATER density
   and the lateral-spread logic); +17 registers (the n00_q..n11_q pipeline stage).
 - **Next**: M6 — Tilt (ADXL345 SPI + gravity_ctrl).
+
+## M6 notes (2026-06-16)
+
+- **New RTL** (`rtl/platform/`): `adxl345_spi` (SPI mode 3 master: initializes
+  ADXL345 POWER_CTL register, then periodically reads X/Y acceleration via
+  multi-byte SPI read at ~100 Hz; outputs signed 10-bit accel_x/accel_y),
+  `gravity_ctrl` (converts tilt vector to 2-bit gravity direction with dead-zone
+  threshold of ~0.1g for hysteresis; dominant-axis wins; SW[8] override for
+  manual control via SW[1:0]).
+- **Integration**: top.sv adds GSENSOR ports (CS_N, SCLK, SDI/MOSI, SDO/MISO,
+  INT[2:1]). `adxl345_spi` → `gravity_ctrl` → `grav_dir` to engine. SW[8]=1
+  overrides to SW[1:0] for deterministic testing/sim. The old `assign grav_dir =
+  SW[1:0]` is replaced by the full accelerometer pipeline.
+- **QSF**: GSENSOR pin assignments added (AB16, AB15, V11, V12, Y14, Y13) with
+  3.3V LVTTL I/O standard. Pin count: 87 → 93.
+- **New TBs**: `tb_adxl345_spi` (6/6 — init sequence, multi-byte read, data
+  latch with mock MISO; verified X=308, Y=-16 from known test pattern),
+  `tb_gravity_ctrl` (10/10 — all four tilt directions, dead-zone hysteresis,
+  SW override, return from override).
+- **Compile**: `quartus_sh --flow compile` → **0 errors**. Fitter: 1,592 LEs (3%),
+  617 regs, **614,592 M9K bits (37%)**, 0 DSP, 1/4 PLLs, 93 pins. STA: **all
+  corners positive**; Fmax clk_100 = 101.4 MHz, clk_25 = 82.0 MHz; worst slack
+  +0.137 ns. `sand_falling.sof` produced.
+- **LE growth**: +188 LEs from M5 (SPI shift register, clock divider, poll timer,
+  FSM, gravity_ctrl comparators). +104 registers.
+- **Next**: M7 — Reactive materials (FIRE/OIL/ACID/PLANT via block_rule reactions).

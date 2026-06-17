@@ -26,18 +26,14 @@ code actually does.
 
 ```
 rtl/
-  platform/   reusable infrastructure (clocking, reset, IO, debug)
+  platform/   reusable infrastructure (clocking, reset, IO, accelerometer, debug)
   sand/       CA-engine datapath (grid_mem, margolus_engine, block_rule, lfsr, ...)
   top.sv      top-level module (matches TOP_LEVEL_ENTITY "top")
 sim/
   tb/         one testbench per RTL module: tb_<module>.sv
   golden/     Python reference models, one per module needing one
-  models/     vendor simulation models, copied unmodified (provenance
-              noted in the .do that compiles them)
   scripts/    vsim .do files: do_<module>.do
   out/        simulation output artifacts (vga_frame.txt, .png) — gitignored
-tools/        (future) Python analysis/rendering scripts
-fpga/         (future) if the Quartus project root ever needs separating from rtl/
 docs/
   CONVENTIONS.md   this file
   STATUS.md        per-milestone resource/timing snapshot

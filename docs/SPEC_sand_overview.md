@@ -88,24 +88,28 @@ delay absorbs the BRAM + palette read latency (sync/blank delayed to match).
 
 ## Input / control
 
-- `SW`: material selector (MVP) and 4-way gravity direction (MVP, before the
-  accelerometer lands).
-- `KEY[1]`: brush — inject the selected material at the cursor/emitter
-  (debounced). A reserved combo clears the grid (EMPTY + border WALL).
-- `HEX`: live particle count (non-EMPTY cells) once the engine runs.
-- `LEDR`: selected-material / status indicator.
+- `SW[1:0]`: manual gravity direction (when SW[8] override is active).
+- `SW[5:2]`: material selector for the brush (0–15).
+- `SW[8]`: accelerometer override — when high, SW[1:0] sets gravity manually.
+- `SW[9]`: clear grid (fills EMPTY + re-draws WALL border).
+- `KEY[0]`: system reset (active-low).
+- `KEY[1]`: brush — inject the selected material at the emitter (debounced).
+- `HEX[3:0]`: live particle count (hex).
+- `HEX[4]`: selected material.
+- `HEX[5]`: current gravity direction.
+- `LEDR[9]`: engine busy. `LEDR[8]`: brush busy. `LEDR[7:0]`: SW echo.
 - `UART`: retained peek/poke debug channel.
-- Later: `adxl345_spi` → `gravity_ctrl` quantizes the tilt vector to a gravity
-  direction (and, as a stretch, a probabilistic blend).
+- `GSENSOR`: ADXL345 accelerometer → `gravity_ctrl` → tilt-steered gravity.
 
 ## Module inventory
 
-New (this project):
+Sand engine (`rtl/sand/`):
 `grid_mem`, `grid_scanout`, `margolus_engine`, `block_rule`, `lfsr`, `brush`,
-`gravity_ctrl`, later `adxl345_spi`, `particle_count`.
+`particle_count`, `bram_tdp`.
 
-Kept platform (unchanged, HW-proven): `pll_sys` (clk_100/clk_25), `reset_sync`,
-`vga_timing`, `palette`, `hex_driver`, `debounce`, `uart_tx/uart_rx/uart_monitor`.
+Platform (`rtl/platform/`):
+`pll_sys`, `reset_sync`, `vga_timing`, `palette`, `hex_driver`, `debounce`,
+`uart_tx`, `uart_rx`, `uart_monitor`, `adxl345_spi`, `gravity_ctrl`.
 
 ## Clocking / reset
 

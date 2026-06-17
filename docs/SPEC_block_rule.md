@@ -49,61 +49,59 @@ canonical DOWN orientation, apply the DOWN rule, then rotate the result back.
 | ID | Name | Density | Behavior |
 |----|------|---------|----------|
 | 0 | EMPTY | 0 | Vacuum; anything falls into it |
-| 1 | WALL | ∞ | Immovable; never participates in swaps |
-| 2 | SAND | 2 | Granular: falls, slides diagonally, sinks through water |
-| 3 | WATER | 1 | Fluid: falls into EMPTY, spreads laterally; displaced by SAND |
+| 1 | WALL | — | Immovable; never participates in swaps |
+| 2 | SAND | 2 | Granular: falls, flows diagonally, sinks through water |
+| 3 | WATER | 1 | Fluid: falls, flows diagonally, spreads laterally |
+| 4–15 | (various) | 2 | Granular solids — same physics as SAND |
 
 ## Rules (gravity = DOWN, canonical orientation)
 
 All rules are **permutations** of the input multiset — no creation or destruction.
 
-### Rule 1: Vertical fall
+### Phase 1: Vertical fall
 
-If a cell in row 0 is SAND and the cell directly below (same column, row 1) is
-EMPTY, swap them.
+A heavier cell in row 0 displaces a lighter cell directly below (same column,
+row 1). Density ordering: EMPTY(0) < WATER(1) < SAND/others(2). WALL is immovable.
 
-```
- SAND | ?       →    EMPTY | ?
- -----+----          ------+----
- EMPTY| ?            SAND  | ?
-```
+- SAND (and materials 4–15) fall into EMPTY or WATER.
+- WATER falls into EMPTY.
+- Both columns are evaluated independently.
 
-(Same for the right column independently.)
+### Phase 2: Diagonal flow (any mobile cell)
 
-### Rule 2: Diagonal slide
+If a mobile cell (not EMPTY, not WALL) is still in row 0 after phase 1, it is
+blocked straight down (the cell below is not EMPTY — otherwise it would have
+fallen). It flows into the diagonal cell in row 1 (opposite column) if that
+cell is EMPTY.
 
-If SAND is in row 0, the cell directly below is occupied (SAND or WALL), but the
-diagonal cell in row 1 (opposite column) is EMPTY, the sand slides diagonally.
+This makes granular materials pile at an angle of repose, and crucially lets
+WATER drain around obstacles instead of getting stuck on sand ledges. If both
+diagonals are open, `rnd` picks left vs right.
 
-If both diagonals are open, `rnd` picks left vs right. If only one is open,
-take it. This is the only non-deterministic step.
+### Phase 3: Lateral spread (fluid — WATER only)
 
-### Rule 3: Walls
+WATER in row 0 spreads sideways to an adjacent EMPTY cell in the same row when
+blocked below. WATER in row 1 spreads sideways unconditionally. `rnd` breaks
+symmetric ties. This gives water a flat surface (sand piles, water levels out).
 
-WALL cells never move. If WALL is in the "destination" position, no swap occurs.
+### Walls
 
-### Rule 4: Identity
+WALL cells never move. No swap involves a WALL as source or destination.
+
+### Identity
 
 If no rule applies, output = input (block is unchanged).
 
-### Priority
-
-1. Vertical fall (both columns independently).
-2. Diagonal slide (only for cells still in row 0 after step 1).
-
-This two-phase evaluation within the combinational block prevents conflicts.
-
 ## Conservation property (critical invariant)
 
-For M3 (EMPTY/WALL/SAND only): the multiset `{n00, n01, n10, n11}` must equal
-`{c00, c01, c10, c11}` — a pure permutation. The testbench checks this
-exhaustively, and `margolus_engine` carries an SVA for it across full frames.
+The multiset `{n00, n01, n10, n11}` must equal `{c00, c01, c10, c11}` — a pure
+permutation for all current materials (no reactions yet). The testbench checks
+this exhaustively, and `margolus_engine` preserves it structurally.
 
 ## Verification
 
-- `tb_block_rule`: exhaustive test of all 3^4 = 81 material combinations ×
-  4 gravity dirs × 2 rnd values = 648 cases (small enough to enumerate fully).
-  Each case checks conservation (multiset equality) and correctness vs the
-  Python golden.
-- Python golden: `sim/golden/block_rule.py` implements the same two-phase
+- `tb_block_rule`: exhaustive test of all 4^4 = 256 material combinations ×
+  4 gravity dirs × 2 rnd values = **2048** cases. Each case checks conservation
+  (multiset equality) and correctness vs the Python golden.
+- Python golden: `sim/golden/block_rule.py` implements the same three-phase
   logic; the TB compares RTL output against it for every case.

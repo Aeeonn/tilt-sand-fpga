@@ -5,9 +5,10 @@
 // produces the updated block after one CA step. Materials are permuted
 // (never created/destroyed) — multiset conservation is structural.
 //
-// Materials: EMPTY(0), WALL(1), SAND(2), WATER(3).
-// Density: EMPTY < WATER < SAND. WALL never moves.
-// See docs/SPEC_block_rule.md for the full rule description.
+// Materials: EMPTY(0), WALL(1), SAND(2), WATER(3), and 4-15 (granular).
+// Density: EMPTY(0) < WATER(1) < SAND/others(2). WALL never moves.
+// Phases: vertical fall → diagonal flow (any mobile cell) → lateral
+// spread (WATER only). See docs/SPEC_block_rule.md.
 // =====================================================================
 module block_rule #(
 		parameter int CELL_BITS = 4
@@ -26,17 +27,29 @@ module block_rule #(
 	localparam logic [CELL_BITS-1:0] MAT_SAND  = 4'd2;
 	localparam logic [CELL_BITS-1:0] MAT_WATER = 4'd3;
 
+	// --- Helper: density lookup (higher = heavier, sinks) ---
+	// EMPTY=0, WATER=1, all other mobile materials=2. WALL=special (immovable).
+	function automatic logic [1:0] density(input logic [CELL_BITS-1:0] mat);
+		case (mat)
+			MAT_EMPTY: return 2'd0;
+			MAT_WATER: return 2'd1;
+			MAT_WALL:  return 2'd0;  // unused — wall checked separately
+			default:   return 2'd2;  // SAND + all materials 4-15: granular solid
+		endcase
+	endfunction
+
+	// --- Helper: is this cell movable (not EMPTY, not WALL)? ---
+	function automatic logic is_mobile(input logic [CELL_BITS-1:0] mat);
+		return (mat != MAT_EMPTY) && (mat != MAT_WALL);
+	endfunction
+
 	// --- Helper: "falls into" — src is heavier and mobile, dst is lighter ---
 	function automatic logic falls_into(input logic [CELL_BITS-1:0] src, dst);
-		// WALL never moves; EMPTY never falls
+		// WALL never moves; nothing falls into WALL
 		if (src == MAT_WALL || dst == MAT_WALL) return 1'b0;
 		if (src == MAT_EMPTY) return 1'b0;
-		// SAND falls into EMPTY or WATER; WATER falls into EMPTY
-		case (src)
-			MAT_SAND:  return (dst == MAT_EMPTY || dst == MAT_WATER);
-			MAT_WATER: return (dst == MAT_EMPTY);
-			default:   return 1'b0;
-		endcase
+		// src falls into dst if src has higher density
+		return density(src) > density(dst);
 	endfunction
 
 	// --- Rotate input block to canonical DOWN orientation ---
@@ -71,17 +84,21 @@ module block_rule #(
 		end
 	end
 
-	// --- Phase 2: diagonal slide (SAND only — granular behavior) ---
+	// --- Phase 2: diagonal flow (any mobile material) ---
+	// After phase 1, a mobile cell still in row 0 is blocked straight down
+	// (otherwise it would have fallen). It flows into an EMPTY diagonal cell.
+	// This makes sand pile at an angle of repose AND lets water drain around
+	// obstacles instead of getting stuck on ledges (fixes "stuck water").
 	logic [CELL_BITS-1:0] d00, d01, d10, d11;
 	logic left_can, right_can;
 
 	always_comb begin
 		d00 = v00; d01 = v01; d10 = v10; d11 = v11;
 
-		// SAND slides diagonally only when blocked by non-displaceable below
-		// (blocked = not EMPTY and not WATER, since sand already fell through those)
-		left_can  = (v00 == MAT_SAND) && (v10 != MAT_EMPTY) && (v10 != MAT_WATER) && (v11 == MAT_EMPTY);
-		right_can = (v01 == MAT_SAND) && (v11 != MAT_EMPTY) && (v11 != MAT_WATER) && (v10 == MAT_EMPTY);
+		// Left-top flows to bottom-right; right-top flows to bottom-left.
+		// Blocked straight down (v1x != EMPTY) + diagonal open (opposite EMPTY).
+		left_can  = is_mobile(v00) && (v10 != MAT_EMPTY) && (v11 == MAT_EMPTY);
+		right_can = is_mobile(v01) && (v11 != MAT_EMPTY) && (v10 == MAT_EMPTY);
 
 		if (left_can && right_can) begin
 			if (rnd) begin
@@ -123,13 +140,17 @@ module block_rule #(
 		wr_bot = (w11 == MAT_WATER) && (w10 == MAT_EMPTY);
 
 		if (wl_bot && wr_bot) begin
+			// Both WATER — symmetric; rnd picks (but both are WATER+EMPTY,
+			// so a swap is the same either way — handled by wl_bot case)
 			if (rnd) begin
-				w10 = d11; w11 = d10;
+				w10 = MAT_EMPTY; w11 = MAT_WATER;
 			end
 		end else if (wl_bot) begin
-			w10 = d11; w11 = d10;
+			// WATER left, EMPTY right → swap
+			w10 = MAT_EMPTY; w11 = MAT_WATER;
 		end else if (wr_bot) begin
-			w11 = d10; w10 = d11;
+			// EMPTY left, WATER right → swap
+			w10 = MAT_WATER; w11 = MAT_EMPTY;
 		end
 	end
 

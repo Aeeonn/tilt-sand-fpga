@@ -5,9 +5,8 @@
 # Pins inherited from the MAXenstein 3D platform .qsf (Terasic System
 # Builder). Changes vs. that file:
 #   - SDRAM (DRAM_*) pins/IO removed: BRAM-only design, no SDRAM.
-#   - File list trimmed to the kept platform layer + top.
-#   - GSENSOR (ADXL345 accelerometer) pins are a documented placeholder
-#     below, added when the SPI driver lands (switch-gravity MVP first).
+#   - File list trimmed to the kept platform layer + sand engine + top.
+#   - GSENSOR (ADXL345 accelerometer) pins added for M6 tilt feature.
 #============================================================
 
 set_global_assignment -name FAMILY "MAX 10"
@@ -130,16 +129,20 @@ set_location_assignment PIN_A11 -to LEDR[8]
 set_location_assignment PIN_B11 -to LEDR[9]
 
 #============================================================
-# GSENSOR (ADXL345 3-axis accelerometer, SPI) - PLACEHOLDER
-#
-# The tilt feature lands after the switch-gravity MVP. When
-# rtl/platform/adxl345_spi.sv is added, fill these locations from the
-# DE10-Lite System Builder / User Manual and uncomment. Defining pin
-# locations for ports that don't exist yet only produces warnings, so
-# they are intentionally left commented for now:
-#   GSENSOR_CS_N, GSENSOR_SCLK, GSENSOR_SDI, GSENSOR_SDO,
-#   GSENSOR_INT1, GSENSOR_INT2
+# GSENSOR (ADXL345 3-axis accelerometer, SPI)
 #============================================================
+set_location_assignment PIN_AB16 -to GSENSOR_CS_N
+set_location_assignment PIN_Y14 -to GSENSOR_INT[1]
+set_location_assignment PIN_Y13 -to GSENSOR_INT[2]
+set_location_assignment PIN_AB15 -to GSENSOR_SCLK
+set_location_assignment PIN_V11 -to GSENSOR_SDI
+set_location_assignment PIN_V12 -to GSENSOR_SDO
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GSENSOR_CS_N
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GSENSOR_INT[1]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GSENSOR_INT[2]
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GSENSOR_SCLK
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GSENSOR_SDI
+set_instance_assignment -name IO_STANDARD "3.3-V LVTTL" -to GSENSOR_SDO
 
 #============================================================
 # Project settings
@@ -200,6 +203,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/uart_tx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/uart_rx.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/uart_monitor.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/palette.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/adxl345_spi.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/platform/gravity_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/bram_tdp.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/grid_mem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/grid_scanout.sv
@@ -209,4 +214,5 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/margolus_engine.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/brush.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/particle_count.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/top.sv
+
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
