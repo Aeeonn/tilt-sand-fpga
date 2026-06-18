@@ -162,8 +162,12 @@ module margolus_engine #(
 	logic [CELL_BITS-1:0] mid_a_q, mid_b_q, mid_c_q, mid_d_q;
 
 	// Stage 2: greedy water level (combinational), from the midpoint.
+	// Uses the same lfsr_rnd[0] as u_fall: the LFSR only advances in S_APPLY,
+	// so rnd is stable across S_STAGE1 → S_STAGE2 for a given block, matching
+	// the single-rnd block_rule wrapper.
 	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
 	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
+		.rnd(lfsr_rnd[0]),
 		.a_i(mid_a_q), .b_i(mid_b_q), .c_i(mid_c_q), .d_i(mid_d_q),
 		.a_o(s_a),     .b_o(s_b),     .c_o(s_c),     .d_o(s_d)
 	);

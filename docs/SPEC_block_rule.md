@@ -81,24 +81,33 @@ so it slides into an EMPTY diagonal cell in the bottom row. This is **greedy**
 
 `rnd` only breaks the left/right tie when *both* diagonals are open.
 
-### Phase 3: Water horizontal level (greedy)
+### Phase 3: Water horizontal level (throttled by `rnd`)
 
-WATER swaps into an adjacent EMPTY cell in the same row (each row independently).
-Combined with the diagonal flow and the Margolus phase alternation, this lets a
-body of water level out to a flat surface quickly instead of holding a hump.
+WATER swaps into an adjacent EMPTY cell in the same row (each row
+independently), but **only when `rnd` is set** (~half the time). Throttling
+sideways flow to ~half rate while the vertical fall runs every step makes
+falling outpace spreading, so a falling body stays cohesive instead of
+dispersing into a half-density "gas". On the floor the random gating produces
+chaotic sloshing that still settles to a flat surface.
 
 ### Walls
 
 WALL never moves (max density, and the mobile-cell checks exclude it as a source).
 
-### Design note (why greedy)
+### Design note (greedy diagonal, throttled level)
 
-An earlier revision gated the diagonal slide and water spread on `rnd` to try to
-steepen sand piles. On hardware this throttled lateral flow far too hard: water
+An earlier revision gated the **diagonal** slide on `rnd` to steepen sand piles.
+On hardware this throttled granular/water lateral flow far too hard: water
 formed a slow bell-curve hump (minutes to level) and sand built tall narrow
-towers. Reverting to **greedy** flow — letting every blocked cell slide every
-step — gives both natural pyramids *and* fast water leveling. The Margolus
-alternation already supplies the randomness needed to avoid striping.
+towers. The diagonal flow is now **greedy** (every blocked cell slides every
+step) → natural ~45° sand pyramids and fast drainage.
+
+The **horizontal water level** (phase 3) is instead throttled on `rnd`. Greedy
+leveling flattened water but dispersed a *falling* blob into a half-density gas
+(it spread sideways as fast as it fell, and swapped water↔empty on already-flat
+water every phase). Throttling only the level step lets the unthrottled fall
+win the race: the blob falls cohesively, then the random gating makes the body
+slosh chaotically before settling flat — closer to real liquid motion.
 
 ## Pipeline split (for timing)
 
@@ -108,7 +117,8 @@ cycles (closes timing at 100 MHz):
 
 - `block_rule_fall`   — phases 1–2 (vertical fall + greedy diagonal flow),
                         uses `rnd` for the left/right tie-break.
-- `block_rule_settle` — phase 3 (greedy water horizontal level), no `rnd`.
+- `block_rule_settle` — phase 3 (throttled water horizontal level), uses the
+                        same `rnd` bit as the gate.
 
 `block_rule` itself is a thin combinational wrapper that rotates to canonical
 DOWN, chains both stages, and rotates back — the reference for `tb_block_rule`

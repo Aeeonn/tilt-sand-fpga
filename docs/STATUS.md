@@ -311,3 +311,26 @@ exactly **one** Margolus step per displayed frame, so material moved ~1 cell per
   `tb_margolus_engine` 28/28 (multi-pass mass conservation), full regression
   19/19, `tb_top` pass. Golden `margolus_engine.py` gained `--passes`.
 - **Compile**: 0 errors, STA closed.
+
+## Water feel — throttled leveling (2026-06-18)
+
+Hardware still showed water "pooling in weird spaces": a poured blob dispersed
+into a **half-density gas** (`~.~.~` checkerboard) while falling, then condensed
+— it teleported rather than flowing. Root cause (found via a Python pour
+harness): greedy phase-3 horizontal leveling spread water sideways *as fast as
+it fell*, and also swapped water↔empty on already-flat water every Margolus
+phase. Wanted behaviour: cohesive fall → chaotic sloshing → settle flat.
+
+- **Fix**: throttle phase-3 water leveling on `rnd` (fires ~half the time). The
+  unthrottled vertical fall then outpaces sideways spread, so a falling body
+  stays cohesive; on the floor the random gating produces chaotic sloshing waves
+  that still settle flat. Verified against several variants (support-gate →
+  frozen mound; pressure → fountain; greedy → gas): throttle was the only one
+  giving cohesive-fall + slosh + flat-settle.
+- **RTL**: `block_rule_settle` gained a `rnd` input gating its swaps;
+  `block_rule` wrapper and `margolus_engine` feed it the same `lfsr_rnd[0]` used
+  by the fall stage (stable across S_STAGE1→S_STAGE2, so it matches the wrapper).
+- **Verification**: regenerated `block_rule_vectors.mem` (2048, all conserve
+  mass), `tb_block_rule` 2048/2048 (RTL == golden), `tb_margolus_engine` 28/28,
+  `tb_top` pass.
+- **Compile**: 0 errors, STA closed.

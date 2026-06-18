@@ -67,8 +67,11 @@ def _rule_down(c00, c01, c10, c11, rnd):
                            into an empty diagonal (granular → ~45° pyramids,
                            water → drains and spreads). rnd only breaks the
                            left/right tie when both diagonals are open.
-      3. Water level     — GREEDY: water spreads into an adjacent EMPTY in the
-                           same row, letting it flatten quickly.
+      3. Water level     — THROTTLED: water spreads into an adjacent EMPTY in
+                           the same row only when rnd is set, so the
+                           (unthrottled) fall outpaces sideways flow → falling
+                           water stays cohesive, the floor sloshes chaotically,
+                           then settles flat.
 
     Each phase is a swap (or no-op) → a pure permutation (conserves mass).
     Returns (n00, n01, n10, n11).
@@ -95,16 +98,20 @@ def _rule_down(c00, c01, c10, c11, rnd):
     elif rb:
         b, c = c, b
 
-    # Phase 3: greedy water horizontal level — swap water into an adjacent
-    # EMPTY cell in each row (over the alternating lattice this levels flat).
-    if a == WATER and b == EMPTY:
-        a, b = b, a
-    elif b == WATER and a == EMPTY:
-        a, b = b, a
-    if c == WATER and d == EMPTY:
-        c, d = d, c
-    elif d == WATER and c == EMPTY:
-        c, d = d, c
+    # Phase 3: throttled water horizontal level — only fires when rnd is set.
+    # Throttling sideways flow to ~half rate lets the (unthrottled) vertical
+    # fall outpace spreading, so a falling body stays cohesive instead of
+    # dispersing into a half-density "gas". The random gating makes the floor
+    # slosh chaotically before settling flat.
+    if rnd:
+        if a == WATER and b == EMPTY:
+            a, b = b, a
+        elif b == WATER and a == EMPTY:
+            a, b = b, a
+        if c == WATER and d == EMPTY:
+            c, d = d, c
+        elif d == WATER and c == EMPTY:
+            c, d = d, c
 
     return a, b, c, d
 

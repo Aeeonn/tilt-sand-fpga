@@ -50,9 +50,10 @@ module block_rule #(
 		.a_o(f_a), .b_o(f_b), .c_o(f_c), .d_o(f_d)
 	);
 
-	// Stage 2: greedy water horizontal level.
+	// Stage 2: throttled water horizontal level (gated by the same rnd bit).
 	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
 	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
+		.rnd(rnd),
 		.a_i(f_a), .b_i(f_b), .c_i(f_c), .d_i(f_d),
 		.a_o(s_a), .b_o(s_b), .c_o(s_c), .d_o(s_d)
 	);
