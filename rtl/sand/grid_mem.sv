@@ -25,7 +25,8 @@ module grid_mem #(
 		// ---- CA / system domain (clk_a) ----
 		input  logic                 clk_a,
 		input  logic                 rst_n_a,
-		input  logic [ADDR_BITS-1:0] rd_addr,    // read FRONT bank
+		input  logic [ADDR_BITS-1:0] rd_addr,    // read FRONT (rd_back=0) or BACK (rd_back=1)
+		input  logic                 rd_back,    // 1: read the BACK bank (in-place multi-pass)
 		output logic [CELL_BITS-1:0] rd_data,    // 1-cycle registered
 		input  logic                 wr_en,      // write BACK bank
 		input  logic [ADDR_BITS-1:0] wr_addr,
@@ -44,7 +45,15 @@ module grid_mem #(
 );
 
 	// ---------------------------------------------------------------
-	// Port-A routing: front bank reads (rd_addr), back bank writes.
+	// Port-A routing.
+	//   Normal pass (rd_back=0): front bank is read at rd_addr, back bank
+	//   is written at wr_addr/wr_en.
+	//   In-place pass (rd_back=1): the engine reads AND writes the BACK
+	//   bank.  Reads and writes are time-separated by the engine FSM
+	//   (S_READ* vs S_WRITE*), so the back bank's single port A is muxed:
+	//   it issues a write when wr_en is asserted, otherwise it issues the
+	//   read at rd_addr.  This is safe because Margolus processes disjoint
+	//   2x2 blocks, so no block's read overlaps another block's write.
 	// ---------------------------------------------------------------
 	logic [ADDR_BITS-1:0] a0_addr, a1_addr;
 	logic                 a0_we,   a1_we;
@@ -52,20 +61,30 @@ module grid_mem #(
 	logic [CELL_BITS-1:0] a0_dout, a1_dout;
 	logic [CELL_BITS-1:0] b0_dout, b1_dout;
 
+	// Back-bank port-A request (read when not writing, write when wr_en).
+	logic [ADDR_BITS-1:0] back_addr;
+	logic                 back_we;
+	assign back_addr = wr_en ? wr_addr : rd_addr;
+	assign back_we   = wr_en;
+
 	always_comb begin
 		if (front_a == 1'b0) begin
-			// bank0 = front (read), bank1 = back (write)
-			a0_addr = rd_addr; a0_we = 1'b0;  a0_din = '0;
-			a1_addr = wr_addr; a1_we = wr_en; a1_din = wr_data;
+			// bank0 = front, bank1 = back
+			a0_addr = rd_addr;   a0_we = 1'b0;    a0_din = '0;       // front: read only
+			a1_addr = back_addr; a1_we = back_we; a1_din = wr_data;  // back: read/write
 		end else begin
-			// bank1 = front (read), bank0 = back (write)
-			a1_addr = rd_addr; a1_we = 1'b0;  a1_din = '0;
-			a0_addr = wr_addr; a0_we = wr_en; a0_din = wr_data;
+			// bank1 = front, bank0 = back
+			a1_addr = rd_addr;   a1_we = 1'b0;    a1_din = '0;       // front: read only
+			a0_addr = back_addr; a0_we = back_we; a0_din = wr_data;  // back: read/write
 		end
 	end
 
-	assign rd_data = front_a ? a1_dout : a0_dout;
-	assign px_data = front_b ? b1_dout : b0_dout;
+	// Read source: front bank by default, back bank during in-place passes.
+	logic [CELL_BITS-1:0] front_dout, back_dout;
+	assign front_dout = front_a ? a1_dout : a0_dout;
+	assign back_dout  = front_a ? a0_dout : a1_dout;
+	assign rd_data    = rd_back ? back_dout : front_dout;
+	assign px_data    = front_b ? b1_dout : b0_dout;
 
 	bram_tdp #(.DW(CELL_BITS), .DEPTH(DEPTH), .AW(ADDR_BITS), .INIT_FILE(INIT0_FILE)) bank0 (
 		.clk_a(clk_a), .addr_a(a0_addr), .we_a(a0_we), .din_a(a0_din), .dout_a(a0_dout),

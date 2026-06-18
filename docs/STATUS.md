@@ -264,3 +264,50 @@ Prototyped fixes in Python (ASCII frame dumps) before porting to RTL.
   put, pyramids form), full regression 19/19.
 - **Compile**: 0 errors. Fitter: 1,744 LEs (4%), 715 regs. STA closed: Fmax
   clk_100 103.8 MHz, clk_25 69.9 MHz, worst slack +0.363 ns.
+
+## Physics retune — greedy flow (2026-06-17)
+
+V3's rnd-gated diagonal/spread looked good in unit ASCII tests but on hardware it
+throttled lateral flow too hard: water made a slow bell-curve hump (≈2 min to
+level) and sand built tall narrow towers instead of pyramids (see attached
+photo). Re-tuned on a realistic 40×24 "pour into center" Python harness.
+
+- **Greedy rule** (now 3 phases): (1) vertical fall by density; (2) **greedy**
+  diagonal flow for *any* mobile cell blocked straight down (rnd only breaks the
+  L/R tie when both diagonals open) — granular reaches a natural ~45° angle of
+  repose, water drains/spreads; (3) **greedy** water horizontal level. Removing
+  the rnd gating let material spread as fast as it falls: proper pyramids *and*
+  fast water leveling (flat in ~40–60 frames vs minutes). The Margolus phase
+  alternation already supplies enough randomness to avoid striping.
+- **Stage repartition**: `block_rule_fall` = phases 1–2 (now takes `rnd` for the
+  diagonal tie-break); `block_rule_settle` = phase 3 (no `rnd`). Engine updated
+  to feed rnd into stage 1 and drop the now-unused midpoint rnd register.
+- **Verification**: `tb_block_rule` 2048/2048 (RTL == golden, conserves mass),
+  `tb_margolus_engine` 28/28, full regression 19/19, `tb_top` pass.
+- **Compile**: 0 errors. STA closed, worst slack +0.214 ns.
+
+## Multi-pass engine — natural flow speed (2026-06-18)
+
+Even with the greedy rule, on hardware water leveled too slowly: the engine ran
+exactly **one** Margolus step per displayed frame, so material moved ~1 cell per
+60 Hz frame. Python harness confirmed the rule levels correctly into a flat pool
+— the bottleneck was purely the update *rate*, not the rule.
+
+- **Multi-pass**: `margolus_engine` now runs `NUM_PASSES` (=8) Margolus steps per
+  displayed frame. Pass 0 reads the FRONT bank and writes the BACK bank; passes
+  1..N-1 read **and** write the BACK bank in place. In-place iteration is valid
+  because each Margolus phase processes **disjoint** 2×2 blocks (a block's read
+  never overlaps another block's write), so no extra buffer or CDC is needed.
+  The Margolus phase toggles every pass and persists across frames. `frame_done`
+  pulses only after the final pass; the display swaps at vsync as before (no
+  tearing — the FRONT bank is untouched on port A all frame).
+- **grid_mem**: added `rd_back` input. When high, `rd_data` is sourced from the
+  BACK bank and the back bank's port A is shared between read (when `!wr_en`) and
+  write (when `wr_en`). Normal pass (`rd_back=0`) behaviour is unchanged.
+- **Effect**: physics advances 8 cells per shown frame → water levels/sand piles
+  ~8× faster, looking natural. `NUM_PASSES` is a parameter (4–6 keeps each frame
+  inside the 16.67 ms 60 Hz budget; 8 trades display rate for faster physics).
+- **Verification**: `tb_grid_mem` 26/26 (incl. in-place `rd_back` read),
+  `tb_margolus_engine` 28/28 (multi-pass mass conservation), full regression
+  19/19, `tb_top` pass. Golden `margolus_engine.py` gained `--passes`.
+- **Compile**: 0 errors, STA closed.

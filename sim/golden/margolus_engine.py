@@ -112,10 +112,12 @@ def build_m3_test_grid():
     return g
 
 
-def run_simulation(grid, num_frames, grav_dir=0):
-    """Run num_frames of the Margolus CA and return frame snapshots.
+def run_simulation(grid, num_frames, grav_dir=0, passes_per_frame=1):
+    """Run num_frames displayed frames of the Margolus CA.
 
-    Returns list of (frame_num, grid, mass_count) tuples.
+    Each displayed frame runs ``passes_per_frame`` Margolus steps (matching
+    the RTL multi-pass engine). The Margolus phase toggles every pass and
+    persists across frames. Returns list of (frame_num, grid, mass) tuples.
     """
     results = []
     lfsr_state = LFSR_SEED
@@ -124,10 +126,11 @@ def run_simulation(grid, num_frames, grav_dir=0):
     results.append((0, [row[:] for row in grid], mass0))
 
     for f in range(1, num_frames + 1):
-        grid, lfsr_state = step_frame(grid, phase, grav_dir, lfsr_state)
+        for _ in range(passes_per_frame):
+            grid, lfsr_state = step_frame(grid, phase, grav_dir, lfsr_state)
+            phase = 1 - phase
         mass = count_nonempty(grid)
         results.append((f, [row[:] for row in grid], mass))
-        phase = 1 - phase
 
     return results
 
@@ -146,6 +149,8 @@ def main():
                         help="Output directory (default: sim/golden/)")
     parser.add_argument("--grav", type=int, default=0,
                         help="Gravity direction (0=DOWN)")
+    parser.add_argument("--passes", type=int, default=1,
+                        help="Margolus steps per displayed frame (multi-pass)")
     args = parser.parse_args()
 
     here = pathlib.Path(__file__).resolve().parent
@@ -155,7 +160,7 @@ def main():
     mass0 = count_nonempty(grid)
     print(f"Initial grid: {GRID_W}x{GRID_H}, {mass0} non-empty cells")
 
-    results = run_simulation(grid, args.frames, args.grav)
+    results = run_simulation(grid, args.frames, args.grav, args.passes)
 
     # Write key frames and mass counts
     mass_ok = True

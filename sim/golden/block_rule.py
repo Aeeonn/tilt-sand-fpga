@@ -61,15 +61,14 @@ def _falls_into(src, dst):
 def _rule_down(c00, c01, c10, c11, rnd):
     """Apply the block rule with gravity = DOWN (canonical orientation).
 
-    Working cells a=TL b=TR c=BL d=BR. Four sequential phases:
-      1. Vertical fall  — heavier cell sinks below a lighter one (density).
-      2. Water diagonal — top fluid blocked straight down drains to an empty
-                          diagonal (water flows around obstacles).
-      3. Water level    — fluid spreads horizontally into adjacent EMPTY,
-                          rnd-biased so it converges flat instead of sloshing.
-      4. Sand diagonal  — granular cell blocked by a solid below slides into
-                          an empty diagonal, PROBABILISTIC (rnd) for a steeper
-                          angle of repose (real pyramids).
+    Working cells a=TL b=TR c=BL d=BR. Three sequential phases:
+      1. Vertical fall   — heavier cell sinks below a lighter one (density).
+      2. Diagonal flow   — GREEDY: any mobile cell blocked straight down slides
+                           into an empty diagonal (granular → ~45° pyramids,
+                           water → drains and spreads). rnd only breaks the
+                           left/right tie when both diagonals are open.
+      3. Water level     — GREEDY: water spreads into an adjacent EMPTY in the
+                           same row, letting it flatten quickly.
 
     Each phase is a swap (or no-op) → a pure permutation (conserves mass).
     Returns (n00, n01, n10, n11).
@@ -82,30 +81,30 @@ def _rule_down(c00, c01, c10, c11, rnd):
     if _is_movable(b) and _density(b) > _density(d):
         b, d = d, b
 
-    # Phase 2: water diagonal flow — top fluid blocked straight down drains
-    # into an empty diagonal (lets water flow around obstacles).
-    if a == WATER and c != EMPTY and d == EMPTY:
+    # Phase 2: greedy diagonal flow — any mobile cell blocked straight down
+    # slides into an empty diagonal. rnd breaks the tie when both are open.
+    la = _is_movable(a) and c != EMPTY and d == EMPTY   # a → d (down-right)
+    rb = _is_movable(b) and d != EMPTY and c == EMPTY   # b → c (down-left)
+    if la and rb:
+        if rnd:
+            a, d = d, a
+        else:
+            b, c = c, b
+    elif la:
         a, d = d, a
-    elif b == WATER and d != EMPTY and c == EMPTY:
+    elif rb:
         b, c = c, b
 
-    # Phase 3: water horizontal level — spread into adjacent EMPTY in each
-    # row, rnd-biased so net flow alternates and converges to a flat surface.
-    if a == WATER and b == EMPTY and rnd:
+    # Phase 3: greedy water horizontal level — swap water into an adjacent
+    # EMPTY cell in each row (over the alternating lattice this levels flat).
+    if a == WATER and b == EMPTY:
         a, b = b, a
-    elif b == WATER and a == EMPTY and not rnd:
+    elif b == WATER and a == EMPTY:
         a, b = b, a
-    if c == WATER and d == EMPTY and rnd:
+    if c == WATER and d == EMPTY:
         c, d = d, c
-    elif d == WATER and c == EMPTY and not rnd:
+    elif d == WATER and c == EMPTY:
         c, d = d, c
-
-    # Phase 4: granular diagonal slide — blocked by a solid below, slides
-    # into an empty diagonal. PROBABILISTIC (rnd) → steeper angle of repose.
-    if _is_granular(a) and c != EMPTY and c != WATER and d == EMPTY and rnd:
-        a, d = d, a
-    elif _is_granular(b) and d != EMPTY and d != WATER and c == EMPTY and not rnd:
-        b, c = c, b
 
     return a, b, c, d
 

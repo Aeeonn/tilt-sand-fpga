@@ -190,6 +190,7 @@ module top #(
 	logic [ADDR_BITS-1:0]  eng_rd_addr, eng_wr_addr;
 	logic [CELL_BITS-1:0]  eng_rd_data, eng_wr_data;
 	logic                  eng_wr_en, eng_frame_done, eng_busy;
+	logic                  eng_rd_back;       // engine reads back bank (in-place pass)
 	logic                  grid_swapped;
 	logic                  grid_frame_done;   // gated: after brush post-engine
 
@@ -334,13 +335,17 @@ module top #(
 
 	// --- Read port mux: particle_count reads front when busy ---
 	logic [ADDR_BITS-1:0] grid_rd_addr;
+	logic                 grid_rd_back;
 	logic [CELL_BITS-1:0] eng_rd_data_raw;
 
 	always_comb begin
-		if (pc_busy)
+		if (pc_busy) begin
 			grid_rd_addr = pc_rd_addr;
-		else
+			grid_rd_back = 1'b0;          // particle_count always reads FRONT
+		end else begin
 			grid_rd_addr = eng_rd_addr;
+			grid_rd_back = eng_rd_back;   // engine reads back during in-place passes
+		end
 	end
 
 	// rd_data goes to both; they only use it when active
@@ -349,13 +354,15 @@ module top #(
 
 	// --- Engine instance ---
 	margolus_engine #(
-		.GRID_W(FB_WIDTH), .GRID_H(FB_HEIGHT), .CELL_BITS(CELL_BITS)
+		.GRID_W(FB_WIDTH), .GRID_H(FB_HEIGHT), .CELL_BITS(CELL_BITS),
+		.NUM_PASSES(8)   // Margolus steps per displayed frame (flow speed)
 	) u_engine (
 		.clk       (clk_100),
 		.rst_n     (rst_n_100),
 		.start     (engine_start),
 		.grav_dir  (grav_dir),
 		.rd_addr   (eng_rd_addr),
+		.rd_back   (eng_rd_back),
 		.rd_data   (eng_rd_data),
 		.wr_en     (eng_wr_en),
 		.wr_addr   (eng_wr_addr),
@@ -373,6 +380,7 @@ module top #(
 		.clk_a     (clk_100),
 		.rst_n_a   (rst_n_100),
 		.rd_addr   (grid_rd_addr),
+		.rd_back   (grid_rd_back),
 		.rd_data   (eng_rd_data_raw),
 		.wr_en     (grid_wr_en),
 		.wr_addr   (grid_wr_addr),

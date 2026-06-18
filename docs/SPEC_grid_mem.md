@@ -36,7 +36,8 @@ in the CA engine, `grid_scanout`, and every `.mem` image.
 ```
 // ---- CA / system domain (clk_a = clk_100) ----
 input  clk_a, rst_n_a
-input  [ADDR_BITS-1:0] rd_addr          // read FRONT bank
+input  [ADDR_BITS-1:0] rd_addr          // read FRONT (rd_back=0) or BACK (rd_back=1)
+input                  rd_back          // 1: read BACK bank (in-place multi-pass)
 output [CELL_BITS-1:0] rd_data          // 1-cycle registered read
 input                  wr_en            // write BACK bank
 input  [ADDR_BITS-1:0] wr_addr
@@ -68,6 +69,15 @@ Port-A routing each frame: the **front** bank's port A does the CA read
 `dout_a`; `px_data` from the front bank's `dout_b`. Because a bank is in exactly
 one role for the whole frame, port A never reads and writes the same bank
 simultaneously (no read-during-write hazard).
+
+**In-place multi-pass (`rd_back=1`):** the Margolus engine runs several passes
+per displayed frame; passes after the first read *and* write the BACK bank.
+When `rd_back` is high, `rd_data` is muxed from the **back** bank, and the back
+bank's single port A is shared between read and write by issuing a write when
+`wr_en` is asserted and the read at `rd_addr` otherwise. This is safe because
+the engine's read and write cycles are time-separated (S_READ* vs S_WRITE*) and
+Margolus processes disjoint 2×2 blocks. The FRONT bank is untouched on port A
+during in-place passes, so scanout on port B is unaffected (no tearing).
 
 Budget: 2 × 76 800 × 4 = 614 400 bits ≈ 37 % of the 1 638 Kbit M9K (block-rounded
 ~76 M9K of 182).

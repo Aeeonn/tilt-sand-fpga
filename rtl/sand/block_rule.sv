@@ -42,17 +42,17 @@ module block_rule #(
 		endcase
 	end
 
-	// Stage 1: fall + water diagonal.
+	// Stage 1: vertical fall + greedy diagonal flow (uses rnd for tie-break).
 	logic [CELL_BITS-1:0] f_a, f_b, f_c, f_d;
 	block_rule_fall #(.CELL_BITS(CELL_BITS)) u_fall (
+		.rnd(rnd),
 		.a_i(a), .b_i(b), .c_i(c), .d_i(d),
 		.a_o(f_a), .b_o(f_b), .c_o(f_c), .d_o(f_d)
 	);
 
-	// Stage 2: water level + sand diagonal.
+	// Stage 2: greedy water horizontal level.
 	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
 	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
-		.rnd(rnd),
 		.a_i(f_a), .b_i(f_b), .c_i(f_c), .d_i(f_d),
 		.a_o(s_a), .b_o(s_b), .c_o(s_c), .d_o(s_d)
 	);

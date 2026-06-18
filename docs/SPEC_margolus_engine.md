@@ -6,20 +6,30 @@ FSM that scans the grid in 2×2 blocks, applies `block_rule`, writes results
 back, and signals `frame_done` when the full grid is processed. This drives
 `grid_mem`'s double-buffer swap and is the core update loop.
 
+**Multi-pass:** each displayed frame runs `NUM_PASSES` Margolus steps so the
+physics advances `NUM_PASSES` cells per displayed frame (natural-looking flow
+speed without raising the display refresh). Pass 0 reads the FRONT bank and
+writes the BACK bank; passes 1..`NUM_PASSES`-1 read **and** write the BACK
+bank in place (`rd_back=1`). In-place iteration is valid because each Margolus
+phase processes **disjoint** 2×2 blocks — a block's read never overlaps another
+block's write. `frame_done` pulses only after the final pass.
+
 ## Interface
 
 ```systemverilog
 module margolus_engine #(
-    parameter int GRID_W    = 320,
-    parameter int GRID_H    = 240,
-    parameter int CELL_BITS = 4
+    parameter int GRID_W     = 320,
+    parameter int GRID_H     = 240,
+    parameter int CELL_BITS  = 4,
+    parameter int NUM_PASSES = 8     // Margolus steps per displayed frame
 ) (
     input  logic                 clk,         // clk_100
     input  logic                 rst_n,
     input  logic                 start,       // 1-cyc: begin a new frame
     input  logic [1:0]           grav_dir,    // gravity direction for block_rule
-    // grid_mem port-A (read front, write back)
+    // grid_mem port-A (read front/back, write back)
     output logic [ADDR_BITS-1:0] rd_addr,
+    output logic                 rd_back,     // 1: read BACK bank (in-place pass)
     input  logic [CELL_BITS-1:0] rd_data,     // 1-cycle latency
     output logic                 wr_en,
     output logic [ADDR_BITS-1:0] wr_addr,
@@ -32,7 +42,9 @@ module margolus_engine #(
 
 ## Block partitioning (Margolus alternation)
 
-Each frame uses one **phase**, alternating 0 and 1 each frame:
+Each pass uses one **phase**. The phase toggles every pass and **persists
+across frames** (so over time both phases run equally regardless of
+`NUM_PASSES` parity):
 
 - **Phase 0**: blocks aligned at even (x,y) — block (bx,by) covers cells
   `(2*bx, 2*by)` to `(2*bx+1, 2*by+1)`.
@@ -61,10 +73,10 @@ S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_STAGE1 → S_STAG
 | S_ADDR | Register the 4 cell addresses (breaks the multiply timing path). |
 | S_READ0..3 | Issue 4 read addresses for the current 2×2 block, one per cycle. Each read has 1-cycle BRAM latency, so we pipeline: issue addr in READn, capture data in READn+1. |
 | S_APPLY | All 4 cells captured; rotate to canonical DOWN. Advance the LFSR. |
-| S_STAGE1 | Register `block_rule_fall` output (phases 1–2) + the rnd bit — first half of the split rule. |
-| S_STAGE2 | Register `block_rule_settle` output (phases 3–4), rotated back — final block result. |
+| S_STAGE1 | Register `block_rule_fall` output (phases 1–2: fall + greedy diagonal, uses rnd) — first half of the split rule. |
+| S_STAGE2 | Register `block_rule_settle` output (phase 3: greedy water level), rotated back — final block result. |
 | S_WRITE0..3 | Write the 4 result cells back (4 cycles, one write per cycle to the back bank). |
-| S_NEXT | Advance to the next block. If more blocks remain, go to S_ADDR. If all done, pulse `frame_done`, toggle phase, return to S_IDLE. |
+| S_NEXT | Advance to the next block. If more blocks remain, go to S_ADDR. If the pass is complete: toggle phase, advance the pass counter, reset block coords; if it was the final pass pulse `frame_done` and return to S_IDLE, otherwise start the next (in-place) pass at S_ADDR. |
 
 ### Read pipeline detail
 
@@ -94,9 +106,12 @@ Row-major by block row, then block column. For phase 0:
 ### Cycle budget
 
 Per block: 1 addr + 4 read + 1 apply + 2 stage + 4 write + 1 next = 13 cycles.
-Phase 0: 19,200 blocks × 12 = 230,400 cycles @ 100 MHz = 2.3 ms.
-Phase 1: 18,921 blocks × 10 = 189,210 cycles @ 100 MHz = 1.89 ms.
-Total per frame: ~3.8 ms ≪ 16.67 ms (60 Hz) — vast headroom.
+One pass ≈ 19,200 blocks × 13 ≈ 250,000 cycles @ 100 MHz ≈ 2.5 ms.
+With `NUM_PASSES = 8`, a displayed frame takes ~20 ms of engine time; the
+sequencer waits for completion and swaps at the next vsync (no tearing, so
+the effective display rate simply drops toward ~30–50 Hz while the physics
+advances 8 cells per shown frame). Lower `NUM_PASSES` (e.g. 4–6) keeps the
+update inside one 16.67 ms frame for a steady 60 Hz display.
 
 ## Start / frame_done handshake with top
 

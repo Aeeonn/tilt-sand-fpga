@@ -26,6 +26,7 @@ module tb_grid_mem;
 	logic [AW-1:0]        rd_addr = 0, wr_addr = 0, px_addr = 0;
 	logic [CELL_BITS-1:0] rd_data, wr_data = 0, px_data;
 	logic                 wr_en = 0, frame_done = 0, vsync_tick = 0;
+	logic                 rd_back = 0;
 	logic                 swapped, front_a, front_b;
 
 	int pass_count = 0, fail_count = 0, printed = 0;
@@ -33,7 +34,7 @@ module tb_grid_mem;
 
 	grid_mem #(.GRID_W(GRID_W), .GRID_H(GRID_H), .CELL_BITS(CELL_BITS)) dut (
 		.clk_a(clk_a), .rst_n_a(rst_n_a),
-		.rd_addr(rd_addr), .rd_data(rd_data),
+		.rd_addr(rd_addr), .rd_back(rd_back), .rd_data(rd_data),
 		.wr_en(wr_en), .wr_addr(wr_addr), .wr_data(wr_data),
 		.frame_done(frame_done), .swapped(swapped), .front_a(front_a),
 		.clk_b(clk_b), .rst_n_b(rst_n_b),
@@ -86,6 +87,14 @@ module tb_grid_mem;
 		@(negedge clk_a); rd_addr = a;
 		@(posedge clk_a); #1;             // BRAM registers dout
 		d = rd_data;
+	endtask
+
+	// Read the BACK bank in place (rd_back=1).
+	task automatic a_read_back(input [AW-1:0] a, output [CELL_BITS-1:0] d);
+		@(negedge clk_a); rd_addr = a; rd_back = 1;
+		@(posedge clk_a); #1;
+		d = rd_data;
+		@(negedge clk_a); rd_back = 0;
 	endtask
 
 	task automatic b_read(input [AW-1:0] a, output [CELL_BITS-1:0] d);
@@ -176,6 +185,18 @@ module tb_grid_mem;
 
 		// exactly three swaps happened
 		ck_cell("swap pulse count", swap_pulses[CELL_BITS-1:0], 4'd3);
+
+		// --- in-place (rd_back) read of the BACK bank for multi-pass ---
+		// front is bank1 now; back bank = bank0. Write a value into the back
+		// bank and read it straight back via rd_back without swapping.
+		a_write(5'd2,  4'h9);
+		a_write(5'd10, 4'hE);
+		a_read_back(5'd2,  d); ck_cell("rd_back back[2]",  d, 4'h9);
+		a_read_back(5'd10, d); ck_cell("rd_back back[10]", d, 4'hE);
+		// rd_back=0 must still read the FRONT bank (bank1 = P1 intact)
+		a_read(5'd1,  d); ck_cell("front read after rd_back", d, 4'h3);
+		// no swap should have occurred from the in-place activity
+		ck_cell("swap count unchanged after rd_back", swap_pulses[CELL_BITS-1:0], 4'd3);
 
 		if (fail_count == 0)
 			$display("TB tb_grid_mem: %0d/%0d PASS", pass_count, pass_count);

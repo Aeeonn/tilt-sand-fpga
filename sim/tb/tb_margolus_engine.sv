@@ -23,24 +23,30 @@ module tb_margolus_engine;
 	logic [1:0] grav_dir;
 	logic [AW-1:0] rd_addr, wr_addr;
 	logic [CELL_BITS-1:0] rd_data, wr_data;
-	logic wr_en, frame_done, busy;
+	logic wr_en, frame_done, busy, rd_back;
 
 	int pass_count = 0, fail_count = 0, printed = 0;
 	localparam int MAXP = 20;
 
 	// --- Small RAM to model grid_mem port A behavior ---
-	// front/back banks. Engine reads front, writes back.
+	// front/back banks. Engine reads front (rd_back=0) or back (rd_back=1,
+	// in-place multi-pass), and always writes the back bank.
 	logic [CELL_BITS-1:0] bank0 [DEPTH];
 	logic [CELL_BITS-1:0] bank1 [DEPTH];
 	logic front_sel;   // 0 = bank0 is front
 
 	// 1-cycle registered read (mimic bram_tdp latency)
 	logic [CELL_BITS-1:0] rd_data_reg;
+	logic rd_from_bank1;  // which physical bank the read targets
+	always_comb begin
+		// back bank = !front_sel; read source = back when rd_back else front
+		rd_from_bank1 = rd_back ? (front_sel == 1'b0) : (front_sel == 1'b1);
+	end
 	always_ff @(posedge clk) begin
-		if (front_sel == 1'b0)
-			rd_data_reg <= bank0[rd_addr];
-		else
+		if (rd_from_bank1)
 			rd_data_reg <= bank1[rd_addr];
+		else
+			rd_data_reg <= bank0[rd_addr];
 	end
 	assign rd_data = rd_data_reg;
 
@@ -62,6 +68,7 @@ module tb_margolus_engine;
 		.start     (start),
 		.grav_dir  (grav_dir),
 		.rd_addr   (rd_addr),
+		.rd_back   (rd_back),
 		.rd_data   (rd_data),
 		.wr_en     (wr_en),
 		.wr_addr   (wr_addr),

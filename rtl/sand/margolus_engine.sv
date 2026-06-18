@@ -5,23 +5,31 @@
 // block_rule to each block, writes results to the back buffer, then
 // signals frame_done. See docs/SPEC_margolus_engine.md.
 //
-// Timing budget per block: 10 cycles (4 read + 1 apply + 4 write + 1 next).
-// Phase 0: 160×120 = 19200 blocks × 10 = 192k cycles @ 100 MHz = 1.92 ms.
-// Total both phases: ~3.8 ms ≪ 16.67 ms (60 Hz).
+// Multi-pass: each displayed frame runs NUM_PASSES Margolus steps so the
+// physics advances NUM_PASSES cells per displayed frame (natural-looking
+// flow speed). Pass 0 reads the FRONT bank and writes the BACK bank.
+// Passes 1..NUM_PASSES-1 read AND write the BACK bank in place (rd_back=1),
+// which is safe because Margolus processes disjoint 2×2 blocks. The
+// Margolus phase toggles every pass and persists across frames.
+//
+// Timing budget per block: 13 cycles. Phase 0: 160×120 = 19200 blocks.
+// One pass ≈ 250k cycles @ 100 MHz ≈ 2.5 ms. NUM_PASSES passes per frame.
 // =====================================================================
 module margolus_engine #(
-		parameter int GRID_W    = 320,
-		parameter int GRID_H    = 240,
-		parameter int CELL_BITS = 4,
-		parameter int ADDR_BITS = $clog2(GRID_W * GRID_H)
+		parameter int GRID_W     = 320,
+		parameter int GRID_H     = 240,
+		parameter int CELL_BITS  = 4,
+		parameter int NUM_PASSES = 8,    // Margolus steps per displayed frame
+		parameter int ADDR_BITS  = $clog2(GRID_W * GRID_H)
 ) (
 		input  logic                 clk,
 		input  logic                 rst_n,
 		input  logic                 start,       // 1-cyc: begin a new frame
 		input  logic [1:0]           grav_dir,    // gravity direction
 
-		// grid_mem port-A interface (read front bank, write back bank)
+		// grid_mem port-A interface (read front/back bank, write back bank)
 		output logic [ADDR_BITS-1:0] rd_addr,
+		output logic                 rd_back,     // 1: read BACK bank (in-place pass)
 		input  logic [CELL_BITS-1:0] rd_data,     // 1-cycle latency from BRAM
 		output logic                 wr_en,
 		output logic [ADDR_BITS-1:0] wr_addr,
@@ -43,6 +51,9 @@ module margolus_engine #(
 
 	localparam int BX_BITS = $clog2(BX_MAX_P0);  // 8
 	localparam int BY_BITS = $clog2(BY_MAX_P0);  // 7
+
+	// Pass-counter width (at least 1 bit even if NUM_PASSES==1).
+	localparam int PASS_BITS = (NUM_PASSES <= 1) ? 1 : $clog2(NUM_PASSES);
 
 	// -----------------------------------------------------------------
 	// FSM states
@@ -70,6 +81,7 @@ module margolus_engine #(
 	// Registers
 	// -----------------------------------------------------------------
 	logic                 phase_q;            // Margolus phase (0 or 1)
+	logic [PASS_BITS-1:0] pass_q;             // current pass index (0..NUM_PASSES-1)
 	logic [BX_BITS-1:0]  bx_q;              // block x coordinate
 	logic [BY_BITS-1:0]  by_q;              // block y coordinate
 	logic [CELL_BITS-1:0] c00_q, c01_q, c10_q, c11_q;  // captured cells
@@ -120,9 +132,8 @@ module margolus_engine #(
 
 	// -----------------------------------------------------------------
 	// block_rule split into two pipelined stages (registered midpoint) so
-	// the 4-phase combinational rule fits the clk_100 period. Stage 1
-	// (fall + water diagonal) has no rnd; stage 2 (water level + sand
-	// diagonal) uses the registered rnd bit.
+	// the combinational rule fits the clk_100 period. Stage 1 (fall +
+	// greedy diagonal) uses rnd; stage 2 (greedy water level) does not.
 	// -----------------------------------------------------------------
 	logic [CELL_BITS-1:0] n00, n01, n10, n11;   // final rotated-back result (comb)
 
@@ -138,21 +149,21 @@ module margolus_engine #(
 		endcase
 	end
 
-	// Stage 1: fall + water diagonal (combinational), registered in S_STAGE1.
+	// Stage 1: fall + greedy diagonal (combinational), registered in S_STAGE1.
+	// rnd is stable here (lfsr only advances in S_APPLY).
 	logic [CELL_BITS-1:0] f_a, f_b, f_c, f_d;
 	block_rule_fall #(.CELL_BITS(CELL_BITS)) u_fall (
+		.rnd(lfsr_rnd[0]),
 		.a_i(rot_a), .b_i(rot_b), .c_i(rot_c), .d_i(rot_d),
 		.a_o(f_a),   .b_o(f_b),   .c_o(f_c),   .d_o(f_d)
 	);
 
-	// Registered midpoint (canonical orientation) + rnd for stage 2.
+	// Registered midpoint (canonical orientation).
 	logic [CELL_BITS-1:0] mid_a_q, mid_b_q, mid_c_q, mid_d_q;
-	logic                 rnd_q;
 
-	// Stage 2: water level + sand diagonal (combinational), from the midpoint.
+	// Stage 2: greedy water level (combinational), from the midpoint.
 	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
 	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
-		.rnd(rnd_q),
 		.a_i(mid_a_q), .b_i(mid_b_q), .c_i(mid_c_q), .d_i(mid_d_q),
 		.a_o(s_a),     .b_o(s_b),     .c_o(s_c),     .d_o(s_d)
 	);
@@ -176,6 +187,9 @@ module margolus_engine #(
 
 	assign bx_limit = phase_q ? BX_BITS'(BX_MAX_P1 - 1) : BX_BITS'(BX_MAX_P0 - 1);
 	assign by_limit = phase_q ? BY_BITS'(BY_MAX_P1 - 1) : BY_BITS'(BY_MAX_P0 - 1);
+
+	// Read source: front bank on pass 0, back bank (in-place) on later passes.
+	assign rd_back = (pass_q != '0);
 
 	// -----------------------------------------------------------------
 	// FSM next-state + output logic
@@ -266,9 +280,15 @@ module margolus_engine #(
 
 			S_NEXT: begin
 				if (bx_q == bx_limit && by_q == by_limit) begin
-					// All blocks processed — frame complete
-					frame_done = 1'b1;
-					state_d    = S_IDLE;
+					// Last block of this pass.
+					if (pass_q == PASS_BITS'(NUM_PASSES - 1)) begin
+						// Final pass — frame complete.
+						frame_done = 1'b1;
+						state_d    = S_IDLE;
+					end else begin
+						// More passes to run — start the next pass in place.
+						state_d = S_ADDR;
+					end
 				end else begin
 					state_d = S_ADDR;
 				end
@@ -285,6 +305,7 @@ module margolus_engine #(
 		if (!rst_n) begin
 			state       <= S_IDLE;
 			phase_q     <= 1'b0;
+			pass_q      <= '0;
 			bx_q        <= '0;
 			by_q        <= '0;
 			c00_q       <= '0;
@@ -295,7 +316,6 @@ module margolus_engine #(
 			mid_b_q     <= '0;
 			mid_c_q     <= '0;
 			mid_d_q     <= '0;
-			rnd_q       <= 1'b0;
 			n00_q       <= '0;
 			n01_q       <= '0;
 			n10_q       <= '0;
@@ -336,15 +356,14 @@ module margolus_engine #(
 			endcase
 
 			// Register block_rule outputs across two pipeline stages.
-			// S_STAGE1: c11_q is valid → register stage-1 (fall) midpoint and
-			//           the rnd bit for stage-2 (lfsr is stable here — it only
-			//           advances on lfsr_en in S_APPLY).
+			// S_STAGE1: c11_q is valid → register stage-1 (fall + diagonal)
+			//           midpoint. rnd (lfsr_rnd[0]) is consumed combinationally
+			//           by u_fall this cycle; stage 2 needs no rnd.
 			if (state == S_STAGE1) begin
 				mid_a_q <= f_a;
 				mid_b_q <= f_b;
 				mid_c_q <= f_c;
 				mid_d_q <= f_d;
-				rnd_q   <= lfsr_rnd[0];
 			end
 			// S_STAGE2: register the rotated-back stage-2 (settle) result.
 			if (state == S_STAGE2) begin
@@ -358,8 +377,9 @@ module margolus_engine #(
 			case (state)
 				S_IDLE: begin
 					if (start) begin
-						bx_q <= '0;
-						by_q <= '0;
+						bx_q   <= '0;
+						by_q   <= '0;
+						pass_q <= '0;
 					end
 				end
 				S_NEXT: begin
@@ -371,8 +391,15 @@ module margolus_engine #(
 							bx_q <= bx_q + 1'b1;
 						end
 					end else begin
-						// Frame done — toggle phase for next frame
+						// Pass complete — toggle Margolus phase (persists across
+						// frames) and advance the pass counter.
 						phase_q <= ~phase_q;
+						bx_q    <= '0;
+						by_q    <= '0;
+						if (pass_q == PASS_BITS'(NUM_PASSES - 1))
+							pass_q <= '0;            // final pass → back to IDLE
+						else
+							pass_q <= pass_q + 1'b1; // start next in-place pass
 					end
 				end
 				default: ;
