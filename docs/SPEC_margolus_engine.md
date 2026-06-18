@@ -61,7 +61,7 @@ gives 159×119 = 18,921 interior blocks (edge blocks held).
 ## FSM
 
 ```
-S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_STAGE1 → S_STAGE2 → S_WRITE0..3 → S_NEXT
+S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_STAGE1 → S_STAGE2 → S_STAGE3 → S_WRITE0..3 → S_NEXT
                       ↑___________________________________________________________________________|
 ```
 
@@ -73,8 +73,9 @@ S_IDLE → (start) → S_ADDR → S_READ0..3 → S_APPLY → S_STAGE1 → S_STAG
 | S_ADDR | Register the 4 cell addresses (breaks the multiply timing path). |
 | S_READ0..3 | Issue 4 read addresses for the current 2×2 block, one per cycle. Each read has 1-cycle BRAM latency, so we pipeline: issue addr in READn, capture data in READn+1. |
 | S_APPLY | All 4 cells captured; rotate to canonical DOWN. Advance the LFSR. |
-| S_STAGE1 | Register `block_rule_fall` output (phases 1–2: fall + greedy diagonal, uses rnd) — first half of the split rule. |
-| S_STAGE2 | Register `block_rule_settle` output (phase 3: greedy water level), rotated back — final block result. |
+| S_STAGE1 | Register `block_rule_fall` output (phases 1–2: vertical fall + granular diagonal, uses r0) into midpoint 1. |
+| S_STAGE2 | Register `block_rule_flow` output (phases 3–4: water rise + momentum advection, uses r0) into midpoint 2. |
+| S_STAGE3 | Register `block_rule_settle` output (phases 5–6: cohesive repack + damping, uses r0&r1), rotated back — final block result. |
 | S_WRITE0..3 | Write the 4 result cells back (4 cycles, one write per cycle to the back bank). |
 | S_NEXT | Advance to the next block. If more blocks remain, go to S_ADDR. If the pass is complete: toggle phase, advance the pass counter, reset block coords; if it was the final pass pulse `frame_done` and return to S_IDLE, otherwise start the next (in-place) pass at S_ADDR. |
 
@@ -105,7 +106,7 @@ Row-major by block row, then block column. For phase 0:
 
 ### Cycle budget
 
-Per block: 1 addr + 4 read + 1 apply + 2 stage + 4 write + 1 next = 13 cycles.
+Per block: 1 addr + 4 read + 1 apply + 3 stage + 4 write + 1 next = 14 cycles.
 One pass ≈ 19,200 blocks × 13 ≈ 250,000 cycles @ 100 MHz ≈ 2.5 ms.
 With `NUM_PASSES = 8`, a displayed frame takes ~20 ms of engine time; the
 sequencer waits for completion and swaps at the next vsync (no tearing, so

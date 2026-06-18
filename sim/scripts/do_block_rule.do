@@ -7,7 +7,7 @@ if {![file exists sim/work]} {
 }
 vmap work sim/work
 
-vlog -sv rtl/sand/block_rule_fall.sv rtl/sand/block_rule_settle.sv rtl/sand/block_rule.sv
+vlog -sv rtl/sand/block_rule_fall.sv rtl/sand/block_rule_flow.sv rtl/sand/block_rule_settle.sv rtl/sand/block_rule.sv
 vlog -sv sim/tb/tb_block_rule.sv
 
 vsim -c work.tb_block_rule

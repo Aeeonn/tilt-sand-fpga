@@ -58,7 +58,7 @@ def step_frame(grid, phase, grav_dir, lfsr_state):
                 c01 = grid[y][x+1]
                 c10 = grid[y+1][x]
                 c11 = grid[y+1][x+1]
-                rnd_bit = state & 1
+                rnd_bit = state & 3       # 2-bit rnd (r0,r1) for momentum rule
                 state = lfsr_step(state)
                 n00, n01, n10, n11 = block_rule(c00, c01, c10, c11, grav_dir, rnd_bit)
                 out[y][x]     = n00
@@ -75,7 +75,7 @@ def step_frame(grid, phase, grav_dir, lfsr_state):
                 c01 = grid[y][x+1]
                 c10 = grid[y+1][x]
                 c11 = grid[y+1][x+1]
-                rnd_bit = state & 1
+                rnd_bit = state & 3       # 2-bit rnd (r0,r1) for momentum rule
                 state = lfsr_step(state)
                 n00, n01, n10, n11 = block_rule(c00, c01, c10, c11, grav_dir, rnd_bit)
                 out[y][x]     = n00

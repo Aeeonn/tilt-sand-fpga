@@ -304,7 +304,7 @@ RESERVED_INPUT_WITH_WEAK_PULLUP : J11       :        :                   :      
 RESERVED_INPUT_WITH_WEAK_PULLUP : J12       :        :                   :         : 7         :                
 RESERVED_INPUT_WITH_WEAK_PULLUP : J13       :        :                   :         : 7         :                
 RESERVED_INPUT_WITH_WEAK_PULLUP : J14       :        :                   :         : 6         :                
-UART_RX                      : J15       : input  : 3.3-V LVTTL       :         : 6         : N              
+RESERVED_INPUT_WITH_WEAK_PULLUP : J15       :        :                   :         : 6         :                
 GND                          : J16       : gnd    :                   :         :           :                
 VCCIO6                       : J17       : power  :                   : 3.3V    : 6         :                
 HEX4[3]                      : J18       : output : 3.3-V LVTTL       :         : 6         : Y              
@@ -325,8 +325,8 @@ GND                          : K10       : gnd    :                   :         
 VCC                          : K11       : power  :                   : 1.2V    :           :                
 GND                          : K12       : gnd    :                   :         :           :                
 VCC                          : K13       : power  :                   : 1.2V    :           :                
-RESERVED_INPUT_WITH_WEAK_PULLUP : K14       :        :                   :         : 6         :                
-UART_TX                      : K15       : output : 3.3-V LVTTL       :         : 6         : N              
+UART_TX                      : K14       : output : 3.3-V LVTTL       :         : 6         : N              
+UART_RX                      : K15       : input  : 3.3-V LVTTL       :         : 6         : N              
 VCCIO6                       : K16       : power  :                   : 3.3V    : 6         :                
 VCCIO6                       : K17       : power  :                   : 3.3V    : 6         :                
 RESERVED_INPUT_WITH_WEAK_PULLUP : K18       :        :                   :         : 6         :                

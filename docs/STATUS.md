@@ -334,3 +334,50 @@ phase. Wanted behaviour: cohesive fall → chaotic sloshing → settle flat.
   mass), `tb_block_rule` 2048/2048 (RTL == golden), `tb_margolus_engine` 28/28,
   `tb_top` pass.
 - **Compile**: 0 errors, STA closed.
+
+## Velocity-state water — momentum, waves, rise (2026-06-18)
+
+Throttled leveling settled water but **unnaturally**: it relaxed straight to
+flat with no waves, and could not rise (a U-tube stayed stuck at height 1).
+Investigation (`docs/PLAN_water_momentum.md`) found this is a rule-class limit —
+the memoryless rule has no momentum. Chose **Option A**: give water a horizontal
+velocity tag. (Option B, an HPP/FHP lattice gas, was prototyped too but looks
+like a gas, not liquid, and needs an engine/memory rewrite.)
+
+- **Encoding**: water becomes a 3-member family sharing one blue — `WATER`(3)
+  still, `WATER_R`(4) +x, `WATER_L`(5) −x. Cells stay **4-bit** → no BRAM growth
+  (memory unchanged at 37%). Reclaims IDs 4/5 from the unstarted M7 reactive
+  roadmap (deferred). `sand_materials.py` + palette updated.
+- **Rule** (6 phases, tuned in a Python harness until it *looked* right):
+  vertical fall (sheds tag) → granular-only diagonal (sand pyramids; water
+  excluded to keep momentum) → **rise** (blocked moving water climbs+reverses →
+  overshoot & vessel rise) → **advection** (ballistic, lossy reflection) →
+  **cohesive repack** (keeps body dense, feeds slosh) → **damping** (`r0&r1`
+  ~25% → waves decay). Behaviour: a released slab shows decaying overshoot
+  waves (slosh swing amplitude measured to fall ~182→66 over time); water rises
+  in a U-tube; **pools stay dense** while thrown spray breaks into droplets
+  (airborne water sprays — like a real splash); sand still pyramids. All conserve
+  the grouped invariant.
+- **Known limits** (fundamental to 2×2 Margolus velocity tags): violent
+  sloshing disperses thin/airborne water into a half-density spray (looks like
+  droplets, not a sheet), and the surface keeps a gentle residual shimmer rather
+  than freezing perfectly still — the big waves clearly lose energy, but a small
+  surface ripple persists. Rollback point if undesired on HW: commit `a35bfec`.
+- **Conservation**: strict multiset → **grouped** (water family folded). Updated
+  in golden `check_conservation`, `tb_block_rule` (fold fn), and the engine TB.
+- **Gravity**: tags stored in canonical (perpendicular-to-gravity) frame and
+  rotated with the block, so water sloshes correctly under all 4 gravities
+  (verified: LEFT gravity pools water on the side wall).
+- **Pipeline**: rule is deeper, so split into **three** stages — new
+  `block_rule_flow` (rise+advection) between `block_rule_fall` (fall+diagonal)
+  and `block_rule_settle` (repack+damp). Engine gained S_STAGE3 + a 2nd
+  registered midpoint (13→14 cyc/block, negligible vs the multi-pass budget).
+  Uses 2 LFSR bits (`lfsr_rnd[1:0]`).
+- **Verification**: golden regenerated **20736** vectors (6⁴×4×4, all grouped-
+  conserve); `tb_block_rule` 20736/20736 (RTL == golden); `tb_margolus_engine`
+  28/28; new `tb_water_momentum` 123/123 (grouped conservation every frame +
+  slosh swing decays late≪early); `tb_top` 409921/409921. Core unit regression
+  (engine/grid_mem/brush/particle_count/hud/gravity) all green.
+- **Compile**: 0 errors. Fitter 1,825 LEs (4%), 734 regs, memory unchanged
+  (37%). STA closed: worst slack +0.192 ns at 100 MHz (the 3-stage split gave
+  the deeper rule *more* headroom than the old 2-stage).

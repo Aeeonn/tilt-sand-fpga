@@ -66,8 +66,9 @@ module margolus_engine #(
 		S_READ2,   // issue addr for c10, capture c01
 		S_READ3,   // issue addr for c11, capture c10
 		S_APPLY,   // capture c11; advance LFSR
-		S_STAGE1,  // block_rule_fall combinational → register midpoint
-		S_STAGE2,  // block_rule_settle combinational → register result
+		S_STAGE1,  // block_rule_fall combinational → register midpoint 1
+		S_STAGE2,  // block_rule_flow combinational → register midpoint 2
+		S_STAGE3,  // block_rule_settle combinational → register result
 		S_WRITE0,  // write n00
 		S_WRITE1,  // write n01
 		S_WRITE2,  // write n10
@@ -131,9 +132,13 @@ module margolus_engine #(
 	);
 
 	// -----------------------------------------------------------------
-	// block_rule split into two pipelined stages (registered midpoint) so
-	// the combinational rule fits the clk_100 period. Stage 1 (fall +
-	// greedy diagonal) uses rnd; stage 2 (greedy water level) does not.
+	// block_rule split into THREE pipelined stages (registered midpoints) so
+	// the deeper momentum rule fits the clk_100 period:
+	//   Stage 1 (fall)   block_rule_fall   — vertical fall + granular diagonal
+	//   Stage 2 (flow)   block_rule_flow   — water rise + momentum advection
+	//   Stage 3 (settle) block_rule_settle — cohesive repack + damping
+	// All consume lfsr_rnd, which is stable across the stages (the LFSR only
+	// advances in S_APPLY), matching the single-evaluation block_rule wrapper.
 	// -----------------------------------------------------------------
 	logic [CELL_BITS-1:0] n00, n01, n10, n11;   // final rotated-back result (comb)
 
@@ -149,8 +154,7 @@ module margolus_engine #(
 		endcase
 	end
 
-	// Stage 1: fall + greedy diagonal (combinational), registered in S_STAGE1.
-	// rnd is stable here (lfsr only advances in S_APPLY).
+	// Stage 1: fall + granular diagonal (combinational), registered in S_STAGE1.
 	logic [CELL_BITS-1:0] f_a, f_b, f_c, f_d;
 	block_rule_fall #(.CELL_BITS(CELL_BITS)) u_fall (
 		.rnd(lfsr_rnd[0]),
@@ -158,21 +162,29 @@ module margolus_engine #(
 		.a_o(f_a),   .b_o(f_b),   .c_o(f_c),   .d_o(f_d)
 	);
 
-	// Registered midpoint (canonical orientation).
-	logic [CELL_BITS-1:0] mid_a_q, mid_b_q, mid_c_q, mid_d_q;
+	// Registered midpoint 1 (fall → flow), canonical orientation.
+	logic [CELL_BITS-1:0] m1_a_q, m1_b_q, m1_c_q, m1_d_q;
 
-	// Stage 2: greedy water level (combinational), from the midpoint.
-	// Uses the same lfsr_rnd[0] as u_fall: the LFSR only advances in S_APPLY,
-	// so rnd is stable across S_STAGE1 → S_STAGE2 for a given block, matching
-	// the single-rnd block_rule wrapper.
-	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
-	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
+	// Stage 2: rise + momentum advection (combinational), registered in S_STAGE2.
+	logic [CELL_BITS-1:0] g_a, g_b, g_c, g_d;
+	block_rule_flow #(.CELL_BITS(CELL_BITS)) u_flow (
 		.rnd(lfsr_rnd[0]),
-		.a_i(mid_a_q), .b_i(mid_b_q), .c_i(mid_c_q), .d_i(mid_d_q),
-		.a_o(s_a),     .b_o(s_b),     .c_o(s_c),     .d_o(s_d)
+		.a_i(m1_a_q), .b_i(m1_b_q), .c_i(m1_c_q), .d_i(m1_d_q),
+		.a_o(g_a),    .b_o(g_b),    .c_o(g_c),    .d_o(g_d)
 	);
 
-	// Rotate stage-2 output back to the original orientation (combinational).
+	// Registered midpoint 2 (flow → settle), canonical orientation.
+	logic [CELL_BITS-1:0] m2_a_q, m2_b_q, m2_c_q, m2_d_q;
+
+	// Stage 3: cohesive repack + damping (combinational), from midpoint 2.
+	logic [CELL_BITS-1:0] s_a, s_b, s_c, s_d;
+	block_rule_settle #(.CELL_BITS(CELL_BITS)) u_settle (
+		.rnd0(lfsr_rnd[0]), .rnd1(lfsr_rnd[1]),
+		.a_i(m2_a_q), .b_i(m2_b_q), .c_i(m2_c_q), .d_i(m2_d_q),
+		.a_o(s_a),    .b_o(s_b),    .c_o(s_c),    .d_o(s_d)
+	);
+
+	// Rotate stage-3 output back to the original orientation (combinational).
 	always_comb begin
 		case (grav_dir)
 			2'd0: begin n00 = s_a; n01 = s_b; n10 = s_c; n11 = s_d; end
@@ -245,12 +257,17 @@ module margolus_engine #(
 			end
 
 			S_STAGE1: begin
-				// stage-1 (fall + water diagonal) registered into the midpoint
+				// stage-1 (fall + granular diagonal) registered into midpoint 1
 				state_d = S_STAGE2;
 			end
 
 			S_STAGE2: begin
-				// stage-2 (water level + sand diagonal) registered into n*_q
+				// stage-2 (water rise + advection) registered into midpoint 2
+				state_d = S_STAGE3;
+			end
+
+			S_STAGE3: begin
+				// stage-3 (repack + damping) registered into n*_q
 				state_d = S_WRITE0;
 			end
 
@@ -316,10 +333,14 @@ module margolus_engine #(
 			c01_q       <= '0;
 			c10_q       <= '0;
 			c11_q       <= '0;
-			mid_a_q     <= '0;
-			mid_b_q     <= '0;
-			mid_c_q     <= '0;
-			mid_d_q     <= '0;
+			m1_a_q      <= '0;
+			m1_b_q      <= '0;
+			m1_c_q      <= '0;
+			m1_d_q      <= '0;
+			m2_a_q      <= '0;
+			m2_b_q      <= '0;
+			m2_c_q      <= '0;
+			m2_d_q      <= '0;
 			n00_q       <= '0;
 			n01_q       <= '0;
 			n10_q       <= '0;
@@ -359,18 +380,23 @@ module margolus_engine #(
 				default: ;
 			endcase
 
-			// Register block_rule outputs across two pipeline stages.
-			// S_STAGE1: c11_q is valid → register stage-1 (fall + diagonal)
-			//           midpoint. rnd (lfsr_rnd[0]) is consumed combinationally
-			//           by u_fall this cycle; stage 2 needs no rnd.
+			// Register block_rule outputs across three pipeline stages.
+			// S_STAGE1: register stage-1 (fall + granular diagonal) → midpoint 1.
 			if (state == S_STAGE1) begin
-				mid_a_q <= f_a;
-				mid_b_q <= f_b;
-				mid_c_q <= f_c;
-				mid_d_q <= f_d;
+				m1_a_q <= f_a;
+				m1_b_q <= f_b;
+				m1_c_q <= f_c;
+				m1_d_q <= f_d;
 			end
-			// S_STAGE2: register the rotated-back stage-2 (settle) result.
+			// S_STAGE2: register stage-2 (rise + advection) → midpoint 2.
 			if (state == S_STAGE2) begin
+				m2_a_q <= g_a;
+				m2_b_q <= g_b;
+				m2_c_q <= g_c;
+				m2_d_q <= g_d;
+			end
+			// S_STAGE3: register the rotated-back stage-3 (settle) result.
+			if (state == S_STAGE3) begin
 				n00_q <= n00;
 				n01_q <= n01;
 				n10_q <= n10;

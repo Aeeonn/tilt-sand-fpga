@@ -211,6 +211,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/grid_scanout.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/hud_overlay.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/lfsr.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/block_rule_fall.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/block_rule_flow.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/block_rule_settle.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/block_rule.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/sand/margolus_engine.sv

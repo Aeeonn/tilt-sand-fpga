@@ -24,9 +24,9 @@ MATERIALS = [
     (0,  "EMPTY", "000"),  # vacuum / air (falls through)
     (1,  "WALL",  "777"),  # immovable boundary / static solid
     (2,  "SAND",  "ed6"),  # granular powder (MVP)
-    (3,  "WATER", "34f"),  # fluid (MVP+1)
-    (4,  "OIL",   "531"),  # flammable fluid, lighter than water
-    (5,  "FIRE",  "f50"),  # transient; spreads to flammables
+    (3,  "WATER", "34f"),  # fluid, still / no horizontal momentum (MVP+1)
+    (4,  "WATER_R", "34f"),  # water carrying +x momentum (same blue as WATER)
+    (5,  "WATER_L", "34f"),  # water carrying -x momentum (same blue as WATER)
     (6,  "ACID",  "7e1"),  # dissolves some solids
     (7,  "PLANT", "2a2"),  # grows along water
     (8,  "STEAM", "bcd"),  # rises (inverse gravity)
@@ -38,6 +38,13 @@ MATERIALS = [
     (14, "GLASS", "9ce"),  # static solid (sand + heat)
     (15, "SPARK", "ff6"),  # electricity carrier (stretch: CA-ception)
 ]
+
+# Water momentum family: these IDs all render as water and behave as one fluid
+# for mass-conservation purposes. WATER_R/WATER_L encode horizontal velocity so
+# water can slosh (overshoot + decay) and rise in communicating vessels. The
+# reactive materials OIL/FIRE that previously held IDs 4/5 move to free IDs when
+# milestone M7 begins (none are implemented yet).
+WATER_IDS = (3, 4, 5)
 
 NUM_MATERIALS = len(MATERIALS)
 CELL_BITS = 4
